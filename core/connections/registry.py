@@ -10,20 +10,68 @@ from core.exceptions import ConnectionError
 from core.typed import ConnectionState
 
 if TYPE_CHECKING:
-    from core.typed import BackendProtocol
+    from core.backends.base import BaseBackend
 
 
 class ConnectionRegistry:
+    """Registry for tracking active WebSocket connections.
+
+    ConnectionRegistry maintains an in-memory registry of active WebSocket connections
+    and coordinates with the backend for distributed state management. It provides
+    fast local lookups while ensuring consistency with distributed backends.
+
+    Key features:
+    - Local connection state tracking
+    - User-to-connection mapping
+    - Group membership management
+    - Connection limits enforcement
+    - Backend synchronization
+
+    The registry serves as the single source of truth for connection state
+    within each server instance, while the backend handles cross-server visibility.
+
+    Parameters
+    ----------
+    max_connections : int, optional
+        Maximum total connections allowed. Default: 10000
+    heartbeat_timeout : int, optional
+        Heartbeat timeout in seconds. Default: 60
+    backend : BaseBackend, optional
+        Backend for distributed state. Default: MemoryBackend()
+
+    Examples
+    --------
+    Basic registry setup:
+
+    >>> registry = ConnectionRegistry(
+    ...     max_connections=1000,
+    ...     heartbeat_timeout=30,
+    ...     backend=RedisBackend()
+    ... )
+
+    Registering connections:
+
+    >>> connection = await registry.register(
+    ...     websocket=ws,
+    ...     user_id="alice",
+    ...     metadata={"ip": "192.168.1.1"}
+    ... )
+    >>> print(connection.channel_name)  # ws.alice.1640995200000.a1b2c3d4
+
+    Notes
+    -----
+    Connection limits are enforced locally but may be bypassed in distributed setups
+    where connections are registered on other servers. Backend limits should be used
+    for global enforcement.
+    """
     def __init__(
         self,
         max_connections: int = 10000,
-        heartbeat_interval: int = 30,
         heartbeat_timeout: int = 60,
-        backend: "BackendProtocol | None" = None,
+        backend: "BaseBackend | None" = None,
     ):
         self.connections: dict[str, Connection] = {}
         self.max_connections = max_connections
-        self.heartbeat_interval = heartbeat_interval
         self.heartbeat_timeout = heartbeat_timeout
         self._lock = asyncio.Lock()
         self.backend = backend or MemoryBackend()
@@ -36,6 +84,37 @@ class ConnectionRegistry:
         metadata: dict[str, Any] | None = None,
         heartbeat_timeout: int | None = None,
     ) -> Connection:
+        """Register new WebSocket connection in registry.
+
+        Parameters
+        ----------
+        websocket : WebSocket
+            FastAPI WebSocket instance
+        connection_id : str | None, optional
+            Custom connection identifier. Default: None (auto-generated)
+        user_id : str | None, optional
+            User identifier for authenticated connections. Default: None
+        metadata : dict[str, Any] | None, optional
+            Connection metadata. Default: None
+        heartbeat_timeout : int | None, optional
+            Custom heartbeat timeout. Default: None (use registry default)
+
+        Returns
+        -------
+        Connection
+            New Connection object
+
+        Raises
+        ------
+        ConnectionError
+            If connection limit exceeded or ID already exists
+
+        Notes
+        -----
+        Thread-safe operation using asyncio lock.
+        Registers connection in both local registry and backend.
+        Generates UUID if no connection_id provided.
+        """
         async with self._lock:
             # Use backend count when available so limits consider all servers.
             total_connections = await self.count()
@@ -58,7 +137,6 @@ class ConnectionRegistry:
 
             self.connections[conn_id] = connection
 
-        # Persist to backend
         await self.backend.registry_add_connection(
             connection_id=conn_id,
             user_id=connection.user_id,
@@ -70,26 +148,92 @@ class ConnectionRegistry:
         return connection
 
     async def unregister(self, connection_id: str) -> None:
+        """Remove connection from registry.
+
+        Parameters
+        ----------
+        connection_id : str
+            Connection identifier to remove
+
+        Notes
+        -----
+        Thread-safe operation.
+        Removes from both local registry and backend.
+        No-op if connection doesn't exist.
+        """
         async with self._lock:
             connection = self.connections.pop(connection_id, None)
 
-        # Remove from backend
         if connection is not None:
             await self.backend.registry_remove_connection(
                 connection_id=connection_id, user_id=connection.user_id
             )
 
     def get(self, connection_id: str) -> Connection | None:
-        # WebSocket references only exist locally; only return local connections.
+        """Get connection by ID from local registry.
+
+        Parameters
+        ----------
+        connection_id : str
+            Connection identifier to lookup
+
+        Returns
+        -------
+        Connection | None
+            Connection object if found, None otherwise
+
+        Notes
+        -----
+        Returns only locally registered connections.
+        Use backend methods for cross-server lookups.
+        """
         return self.connections.get(connection_id)
 
     def get_all(self) -> list[Connection]:
+        """Get all locally registered connections.
+
+        Returns
+        -------
+        list[Connection]
+            List of all active Connection objects in local registry
+
+        Notes
+        -----
+        Returns only connections registered on this server.
+        Use backend.registry_count_connections() for global count.
+        """
         return list(self.connections.values())
 
     async def count(self) -> int:
+        """Get total connection count across all servers.
+
+        Returns
+        -------
+        int
+            Total active connections in distributed deployment
+
+        Notes
+        -----
+        Delegates to backend for accurate distributed count.
+        Includes connections from all server instances.
+        """
         return await self.backend.registry_count_connections()
 
     async def add_to_group(self, connection_id: str, group: str) -> None:
+        """Add connection to group in local registry and backend.
+
+        Parameters
+        ----------
+        connection_id : str
+            Connection identifier to add to group
+        group : str
+            Group name to join
+
+        Notes
+        -----
+        Updates both local connection state and backend registry.
+        Ensures cross-server visibility of group membership.
+        """
         if connection := self.get(connection_id):
             connection.groups.add(group)
             # Persist groups to backend for cross-server visibility and cleanup.
@@ -98,6 +242,20 @@ class ConnectionRegistry:
             )
 
     async def remove_from_group(self, connection_id: str, group: str) -> None:
+        """Remove connection from group in local registry and backend.
+
+        Parameters
+        ----------
+        connection_id : str
+            Connection identifier to remove from group
+        group : str
+            Group name to leave
+
+        Notes
+        -----
+        Updates both local connection state and backend registry.
+        Ensures consistent group membership across servers.
+        """
         if connection := self.get(connection_id):
             connection.groups.discard(group)
             # Persist groups to backend for cross-server visibility and cleanup.
@@ -106,16 +264,66 @@ class ConnectionRegistry:
             )
 
     def get_by_group(self, group: str) -> list[Connection]:
+        """Get all local connections in a group.
+
+        Parameters
+        ----------
+        group : str
+            Group name to query
+
+        Returns
+        -------
+        list[Connection]
+            List of Connection objects in the group (local only)
+
+        Notes
+        -----
+        Returns only connections from this server instance.
+        Use backend.group_channels() for cross-server group members.
+        """
         return [conn for conn in self.connections.values() if group in conn.groups]
 
     async def user_channels(self, user_id: str) -> set[str]:
-        """Return all channel names for a user across servers."""
+        """Get all connection channel names for a user across all servers.
+
+        Parameters
+        ----------
+        user_id : str
+            User identifier to query
+
+        Returns
+        -------
+        set[str]
+            Set of channel names for the user
+
+        Notes
+        -----
+        Includes connections from all server instances.
+        Returns empty set for anonymous users (empty user_id).
+        """
         if not user_id:
             return set()
 
         return await self.backend.registry_get_user_connections(user_id)
 
     async def user_channel_count(self, user_id: str) -> int:
+        """Get number of active connections for a user.
+
+        Parameters
+        ----------
+        user_id : str
+            User identifier to query
+
+        Returns
+        -------
+        int
+            Number of active connections for the user
+
+        Notes
+        -----
+        Counts connections across all server instances.
+        Returns 0 for anonymous users.
+        """
         if not user_id:
             return 0
 

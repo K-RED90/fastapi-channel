@@ -23,8 +23,8 @@ class TestWebSocketIntegration:
 
         # Initialize components
         backend = MemoryBackend()
-        registry = ConnectionRegistry()
-        manager = ConnectionManager(backend, registry)
+        registry = ConnectionRegistry(backend=backend)
+        manager = ConnectionManager(registry)
 
         # Middleware stack
         middleware = [ValidationMiddleware(settings.WS_MAX_MESSAGE_SIZE), LoggingMiddleware()]

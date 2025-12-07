@@ -45,8 +45,8 @@ app = FastAPI()
 
 # Initialize components
 backend = MemoryBackend()
-registry = ConnectionRegistry()
-manager = ConnectionManager(backend, registry)
+registry = ConnectionRegistry(backend=backend)
+manager = ConnectionManager(registry)
 
 @app.websocket("/ws/{user_id}")
 async def chat_endpoint(websocket: WebSocket, user_id: str):

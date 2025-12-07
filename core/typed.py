@@ -1,4 +1,6 @@
+import asyncio
 import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -20,6 +22,50 @@ class MessagePriority(Enum):
 
 @dataclass
 class Message:
+    """Represents a WebSocket message with metadata and delivery options.
+
+    The Message class encapsulates all information needed for WebSocket communication,
+    including message type, payload data, routing information, and delivery controls.
+
+    Parameters
+    ----------
+    type : str
+        Message type identifier (e.g., "chat_message", "user_join", "ping")
+    data : Any
+        Message payload data (can be any serializable type)
+    sender_id : str | None, optional
+        ID of the connection that sent the message. Default: None
+    group : str | None, optional
+        Group name for group messaging. Default: None
+    metadata : dict[str, Any] | None, optional
+        Additional metadata for message processing. Default: None
+    priority : MessagePriority, optional
+        Message processing priority. Default: MessagePriority.NORMAL
+    ttl_seconds : float | None, optional
+        Time-to-live in seconds. Message expires after this time. Default: None
+    created_at : float, optional
+        Unix timestamp when message was created. Default: current time
+
+    Examples
+    --------
+    Create a simple chat message:
+
+    >>> message = Message(
+    ...     type="chat_message",
+    ...     data={"text": "Hello world!", "user": "alice"},
+    ...     sender_id="conn_123"
+    ... )
+
+    Create a group message with TTL:
+
+    >>> group_msg = Message(
+    ...     type="announcement",
+    ...     data={"text": "Server maintenance in 5 minutes"},
+    ...     group="admin_channel",
+    ...     priority=MessagePriority.HIGH,
+    ...     ttl_seconds=300.0  # 5 minutes
+    ... )
+    """
     type: str
     data: Any
     sender_id: str | None = None
@@ -30,12 +76,40 @@ class Message:
     created_at: float = field(default_factory=time.time)
 
     def is_expired(self) -> bool:
-        """Return True if message TTL has elapsed."""
+        """Check if message has exceeded its time-to-live.
+
+        Returns
+        -------
+        bool
+            True if TTL has elapsed, False otherwise or if no TTL set
+
+        Examples
+        --------
+        >>> msg = Message(type="test", data="hello", ttl_seconds=60.0)
+        >>> msg.is_expired()  # False (just created)
+        False
+        >>> # After 60+ seconds...
+        >>> msg.is_expired()  # True
+        True
+        """
         if self.ttl_seconds is None:
             return False
         return (time.time() - self.created_at) > self.ttl_seconds
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert message to dictionary representation for serialization.
+
+        Returns
+        -------
+        dict[str, Any]
+            Dictionary containing all message fields
+
+        Examples
+        --------
+        >>> msg = Message(type="test", data="hello")
+        >>> msg.to_dict()
+        {'type': 'test', 'data': 'hello', 'sender_id': None, ...}
+        """
         return {
             "type": self.type,
             "data": self.data,
@@ -51,6 +125,25 @@ class Message:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Message":
+        """Create Message instance from dictionary representation.
+
+        Parameters
+        ----------
+        payload : dict[str, Any]
+            Dictionary containing message fields
+
+        Returns
+        -------
+        Message
+            New Message instance
+
+        Examples
+        --------
+        >>> data = {"type": "chat", "data": "hello", "priority": "high"}
+        >>> msg = Message.from_dict(data)
+        >>> msg.priority
+        <MessagePriority.HIGH: 'high'>
+        """
         priority_value = payload.get("priority", MessagePriority.NORMAL.value)
         priority = (
             priority_value
@@ -70,110 +163,3 @@ class Message:
             ttl_seconds=payload.get("ttl_seconds"),
             created_at=payload.get("created_at", time.time()),
         )
-
-
-class BackendProtocol(ABC):
-    """Protocol for channel layer backends"""
-
-    @abstractmethod
-    async def publish(self, channel: str, message: dict[str, Any]) -> None:
-        """Publish a message to a channel"""
-
-    @abstractmethod
-    async def subscribe(self, channel: str) -> None:
-        """Subscribe to a channel"""
-
-    @abstractmethod
-    async def unsubscribe(self, channel: str) -> None:
-        """Unsubscribe from a channel"""
-
-    @abstractmethod
-    async def group_add(self, group: str, channel: str) -> None:
-        """Add a channel to a group"""
-
-    @abstractmethod
-    async def group_discard(self, group: str, channel: str) -> None:
-        """Remove a channel from a group"""
-
-    @abstractmethod
-    async def group_send(self, group: str, message: dict[str, Any]) -> None:
-        """Send a message to all channels in a group"""
-
-    @abstractmethod
-    async def cleanup(self) -> None:
-        """Cleanup resources"""
-
-    @abstractmethod
-    async def receive(self, channel: str, timeout: float | None = None):
-        """Receive next message from a channel."""
-
-    @abstractmethod
-    async def group_channels(self, group: str) -> set[str]:
-        """Return channels in a group."""
-
-    @abstractmethod
-    async def flush(self) -> None:
-        """Clear backend state."""
-
-    @abstractmethod
-    async def new_channel(self, prefix: str = "channel") -> str:
-        """Generate unique channel name."""
-
-    @abstractmethod
-    async def registry_add_connection(
-        self,
-        connection_id: str,
-        user_id: str | None,
-        metadata: dict[str, Any],
-        groups: set[str],
-        heartbeat_timeout: float,
-    ) -> None:
-        """Add connection to registry with metadata."""
-
-    @abstractmethod
-    async def registry_remove_connection(self, connection_id: str, user_id: str | None) -> None:
-        """Remove connection from registry."""
-
-    @abstractmethod
-    async def registry_update_groups(self, connection_id: str, groups: set[str]) -> None:
-        """Update groups for a connection."""
-
-    @abstractmethod
-    async def registry_get_connection_groups(self, connection_id: str) -> set[str]:
-        """Get groups for a connection."""
-
-    @abstractmethod
-    async def registry_count_connections(self) -> int:
-        """Count total connections in registry."""
-
-    @abstractmethod
-    async def registry_get_user_connections(self, user_id: str) -> set[str]:
-        """Get all connection IDs for a user."""
-
-    @abstractmethod
-    def registry_get_prefix(self) -> str:
-        """Get prefix for registry keys."""
-
-    def supports_broadcast_channel(self) -> bool:
-        """Check if backend supports broadcast channel."""
-        return False
-
-
-class ConsumerProtocol(ABC):
-    """Protocol for WebSocket consumers"""
-
-    @abstractmethod
-    async def connect(self) -> None:
-        """Handle new connection"""
-
-    @abstractmethod
-    async def disconnect(self, code: int) -> None:
-        """Handle disconnection"""
-
-    @abstractmethod
-    async def receive(self, message: Message) -> None:
-        """Handle received message"""
-
-    @abstractmethod
-    async def send(self, message: Message) -> None:
-        """Send message to client"""

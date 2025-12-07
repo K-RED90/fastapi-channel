@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from core.connections.state import Connection
-from core.typed import ConsumerProtocol, Message
+from core.typed import Message
 
+
+if TYPE_CHECKING:
+    from core.consumer.base import BaseConsumer
 
 class Middleware(ABC):
     def __init__(self, next_middleware: Middleware | None = None):
@@ -14,7 +18,7 @@ class Middleware(ABC):
         self,
         message: Message,
         connection: Connection,
-        consumer: ConsumerProtocol,
+        consumer: "BaseConsumer",
     ) -> Message | None:
         """Process message then pass to next middleware."""
         processed_message = await self.process(message, connection, consumer)
@@ -38,7 +42,7 @@ class Middleware(ABC):
         self,
         message: Message,
         connection: Connection,
-        consumer: ConsumerProtocol,
+        consumer: "BaseConsumer",
     ) -> Message | None:
         """Implement middleware logic and return message or None."""
         raise NotImplementedError

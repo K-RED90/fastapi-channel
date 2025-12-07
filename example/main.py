@@ -24,24 +24,24 @@ from example.database import ChatDatabase
 
 settings = Settings()
 
-# Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-backend = RedisBackend(redis_url=settings.REDIS_URL)
+backend = RedisBackend(
+    redis_url=settings.REDIS_URL,
+    registry_expiry=settings.REDIS_REGISTRY_EXPIRY,
+    group_expiry=settings.REDIS_GROUP_EXPIRY,
+)
 registry = ConnectionRegistry(
     backend=backend,
     max_connections=settings.MAX_TOTAL_CONNECTIONS,
-    heartbeat_interval=settings.WS_HEARTBEAT_INTERVAL,
     heartbeat_timeout=settings.WS_HEARTBEAT_TIMEOUT,
 )
 manager = ConnectionManager(
-    backend=backend,
     registry=registry,
     max_connections_per_client=settings.MAX_CONNECTIONS_PER_CLIENT,
     heartbeat_interval=settings.WS_HEARTBEAT_INTERVAL,
-    heartbeat_timeout=settings.WS_HEARTBEAT_TIMEOUT,
 )
 middleware = ValidationMiddleware(settings.WS_MAX_MESSAGE_SIZE) >> LoggingMiddleware()
 
