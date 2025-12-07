@@ -623,8 +623,9 @@
                         }
                     }, delay);
                 } else if (reconnectAttempts >= maxReconnectAttempts) {
-                    showError(`Failed to connect after ${maxReconnectAttempts} attempts`);
+                    showError(`Failed to connect after ${maxReconnectAttempts} attempts. This may be due to connection limits or server issues. Please wait a moment and try again.`);
                     reconnectAttempts = 0; // Reset after showing error
+                    shouldReconnect = false; // Stop auto-reconnecting after max attempts
                 }
             };
 
@@ -632,7 +633,7 @@
                 isConnecting = false;
                 const joinButton = document.querySelector('.btn-primary[onclick="connect()"]');
                 if (joinButton) joinButton.disabled = false;
-                showError('Connection error occurred');
+                // Don't show error here as onclose will handle it
             };
         }
 

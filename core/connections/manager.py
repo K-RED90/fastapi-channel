@@ -129,8 +129,6 @@ class ConnectionManager:
         Performs connection limit checks, registers connection in backend,
         subscribes to personal channel, and starts message receiver task.
         """
-        await websocket.accept()
-
         if user_id:
             current = await self.registry.user_channel_count(user_id)
             if current >= self.max_connections_per_client:
@@ -147,6 +145,8 @@ class ConnectionManager:
                     error_code="CONNECTION_LIMIT_EXCEEDED",
                     context=context,
                 )
+
+        await websocket.accept()
 
         channel_name = await self.registry.backend.new_channel(
             prefix=f"ws.{user_id}" if user_id else "ws"
