@@ -5,14 +5,12 @@ import pytest
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
-from core.backends.redis import RedisBackend
-from core.config import Settings
-from core.connections.manager import ConnectionManager
-from core.connections.registry import ConnectionRegistry
-from core.middleware.logging import LoggingMiddleware
-from core.middleware.validation import ValidationMiddleware
 from example.consumers import ChatConsumer
 from example.database import ChatDatabase
+from fastapi_channel.backends import RedisBackend
+from fastapi_channel.config import Settings
+from fastapi_channel.connections import ConnectionManager, ConnectionRegistry
+from fastapi_channel.middleware import LoggingMiddleware, ValidationMiddleware
 
 
 class TestRedisIntegration:
@@ -22,7 +20,7 @@ class TestRedisIntegration:
     async def redis_app(self):
         """Setup FastAPI app with Redis backend"""
         # Mock Redis for testing (since we may not have Redis running)
-        with patch("core.backends.redis.Redis") as mock_redis_class:
+        with patch("fastapi_channel.backends.redis.Redis") as mock_redis_class:
             mock_redis = mock_redis_class.return_value
             # Configure mock to behave like Redis
             mock_redis.get.return_value = None

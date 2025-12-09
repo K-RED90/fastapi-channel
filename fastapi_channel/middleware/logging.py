@@ -1,6 +1,6 @@
 import logging
 
-from core.middleware.base import Middleware
+from fastapi_channel.middleware import Middleware
 
 
 class LoggingMiddleware(Middleware):

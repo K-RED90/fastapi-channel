@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.backends.redis import RedisBackend
+from fastapi_channel.backends import RedisBackend
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class TestRedisPerformance:
     @pytest.fixture
     async def redis_backend(self):
         """Create RedisBackend instance for performance testing"""
-        with patch("core.backends.redis.Redis") as mock_redis_class:
+        with patch("fastapi_channel.backends.redis.Redis") as mock_redis_class:
             mock_redis = mock_redis_class.return_value
             # Configure mock to simulate Redis behavior with timing
             mock_redis.get.return_value = None
@@ -31,7 +31,7 @@ class TestRedisPerformance:
             mock_redis.flushdb.return_value = True
 
             backend = RedisBackend(redis_url="redis://localhost:6379/0", max_connections=200000)
-            backend.redis = mock_redis
+            backend._redis = mock_redis
             yield backend
 
     @pytest.mark.asyncio

@@ -10,13 +10,13 @@ from redis.asyncio.connection import ConnectionPool
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from core.serializers import JSONSerializer
-from core.utils import with_retry
+from fastapi_channel.serializers import JSONSerializer
+from fastapi_channel.utils import with_retry
 
 from .base import BaseBackend, CleanupStats, OrphanedGroupMembersStats
 
 if TYPE_CHECKING:
-    from core.serializers import BaseSerializer
+    from fastapi_channel.serializers import BaseSerializer
 
 
 T = TypeVar("T")

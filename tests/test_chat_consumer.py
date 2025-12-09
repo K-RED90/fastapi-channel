@@ -3,13 +3,13 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.backends.memory import MemoryBackend
-from core.connections.manager import ConnectionManager
-from core.connections.registry import ConnectionRegistry
-from core.middleware.logging import LoggingMiddleware
-from core.middleware.validation import ValidationMiddleware
-from core.typed import Message
 from example.consumers import ChatConsumer
+from fastapi_channel.backends.memory import MemoryBackend
+from fastapi_channel.connections.manager import ConnectionManager
+from fastapi_channel.connections.registry import ConnectionRegistry
+from fastapi_channel.middleware.logging import LoggingMiddleware
+from fastapi_channel.middleware.validation import ValidationMiddleware
+from fastapi_channel.typed import Message
 
 
 class TestChatConsumer:
@@ -17,9 +17,9 @@ class TestChatConsumer:
 
     def test_imports(self):
         """Test that all imports work correctly"""
-        from core.backends.memory import MemoryBackend
-        from core.middleware.validation import ValidationMiddleware
-        from core.typed import Message
+        from fastapi_channel.backends.memory import MemoryBackend
+        from fastapi_channel.middleware.validation import ValidationMiddleware
+        from fastapi_channel.typed import Message
 
         assert ChatConsumer is not None
         assert MemoryBackend is not None
@@ -31,10 +31,10 @@ class TestChatConsumer:
 
     def test_chat_consumer_creation(self):
         """Test that ChatConsumer can be instantiated"""
-        from core.backends.memory import MemoryBackend
-        from core.middleware.logging import LoggingMiddleware
-        from core.middleware.validation import ValidationMiddleware
         from example.consumers import ChatConsumer
+        from fastapi_channel.backends.memory import MemoryBackend
+        from fastapi_channel.middleware.logging import LoggingMiddleware
+        from fastapi_channel.middleware.validation import ValidationMiddleware
 
         # Create minimal mocks
         connection = Mock()
@@ -111,7 +111,7 @@ class TestChatConsumer:
         """Test ValidationMiddleware functionality"""
         from unittest.mock import Mock
 
-        from core.typed import Message
+        from fastapi_channel.typed import Message
 
         middleware = ValidationMiddleware(max_message_size=10 * 1024 * 1024)  # 10MB
 
@@ -154,7 +154,7 @@ class TestChatConsumer:
         """Test RateLimitMiddleware functionality"""
         from unittest.mock import Mock
 
-        from core.middleware.rate_limit import RateLimitMiddleware
+        from fastapi_channel.middleware import RateLimitMiddleware
 
         middleware = RateLimitMiddleware()
 

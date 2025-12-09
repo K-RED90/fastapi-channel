@@ -8,13 +8,14 @@ from typing import TYPE_CHECKING, Any
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 
-from core.connections.registry import Connection, ConnectionRegistry
-from core.exceptions import ConnectionError
-from core.typed import ConnectionState
-from core.utils import run_with_concurrency_limit
+from fastapi_channel.connections.registry import ConnectionRegistry
+from fastapi_channel.connections.state import Connection
+from fastapi_channel.exceptions import ConnectionError, create_error_context
+from fastapi_channel.typed import ConnectionState
+from fastapi_channel.utils import run_with_concurrency_limit
 
 if TYPE_CHECKING:
-    from core.backends.base import BaseBackend
+    from fastapi_channel.backends import BaseBackend
 
 
 class ConnectionManager:
@@ -155,8 +156,6 @@ class ConnectionManager:
         if user_id:
             current = await self.registry.user_channel_count(user_id)
             if current >= self.max_connections_per_client:
-                from core.exceptions import create_error_context
-
                 context = create_error_context(
                     user_id=user_id,
                     component="connection_manager",

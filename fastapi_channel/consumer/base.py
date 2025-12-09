@@ -2,15 +2,10 @@ import json
 from abc import abstractmethod
 from typing import Any
 
-from core.connections.manager import ConnectionManager
-from core.connections.state import Connection
-from core.exceptions import (
-    BaseError,
-    ValidationError,
-    create_error_context,
-)
-from core.middleware.base import Middleware
-from core.typed import Message, MessagePriority
+from fastapi_channel.connections import Connection, ConnectionManager
+from fastapi_channel.exceptions import BaseError, ValidationError, create_error_context
+from fastapi_channel.middleware import Middleware
+from fastapi_channel.typed import Message, MessagePriority
 
 
 class BaseConsumer:

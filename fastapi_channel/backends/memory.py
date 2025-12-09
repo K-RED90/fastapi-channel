@@ -2,7 +2,7 @@ import asyncio
 from collections import defaultdict
 from typing import Any
 
-from core.utils import run_with_concurrency_limit
+from fastapi_channel.utils import run_with_concurrency_limit
 
 from .base import BaseBackend
 

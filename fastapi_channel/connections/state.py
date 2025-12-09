@@ -5,8 +5,8 @@ from typing import Any
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 
-from core.connections.heartbeat import HeartbeatMonitor
-from core.typed import ConnectionState
+from fastapi_channel.connections.heartbeat import HeartbeatMonitor
+from fastapi_channel.typed import ConnectionState
 
 
 def _now() -> datetime:

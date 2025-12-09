@@ -13,16 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 
-from core.backends.redis import RedisBackend
-from core.config import Settings
-from core.connections.manager import ConnectionManager
-from core.connections.registry import ConnectionRegistry
-from core.exceptions import BaseError
-from core.middleware.logging import LoggingMiddleware
-from core.middleware.rate_limit import RateLimitMiddleware
-from core.middleware.validation import ValidationMiddleware
 from example.consumers import ChatConsumer
 from example.database import ChatDatabase
+from fastapi_channel.backends import MemoryBackend, RedisBackend
+from fastapi_channel.config import Settings
+from fastapi_channel.connections import ConnectionManager, ConnectionRegistry
+from fastapi_channel.exceptions import BaseError
+from fastapi_channel.middleware import LoggingMiddleware, RateLimitMiddleware, ValidationMiddleware
 
 settings = Settings()
 
@@ -30,11 +27,15 @@ logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-backend = RedisBackend(
-    redis_url=settings.REDIS_URL,
-    registry_expiry=settings.REDIS_REGISTRY_EXPIRY,
-    group_expiry=settings.REDIS_GROUP_EXPIRY,
-)
+if settings.BACKEND_TYPE == "redis":
+    backend = RedisBackend(
+        redis_url=settings.REDIS_URL,
+        registry_expiry=settings.REDIS_REGISTRY_EXPIRY,
+        group_expiry=settings.REDIS_GROUP_EXPIRY,
+    )
+else:
+    backend = MemoryBackend()
+
 registry = ConnectionRegistry(
     backend=backend,
     max_connections=settings.MAX_TOTAL_CONNECTIONS,
@@ -60,7 +61,7 @@ middleware = (
             "message_history",
             "typing_start",
             "typing_stop",
-            "list_rooms"
+            "list_rooms",
         },
     )
 )

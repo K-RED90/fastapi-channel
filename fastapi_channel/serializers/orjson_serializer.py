@@ -7,7 +7,7 @@ try:
 except ImportError:
     orjson = None
 
-from core.serializers.base import BaseSerializer
+from fastapi_channel.serializers import BaseSerializer
 
 
 class ORJSONSerializer(BaseSerializer):

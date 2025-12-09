@@ -8,15 +8,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis
 
-from core.backends.memory import MemoryBackend
-from core.backends.redis import RedisBackend
-from core.config import Settings
-from core.connections.manager import ConnectionManager
-from core.connections.registry import ConnectionRegistry
-from core.middleware.logging import LoggingMiddleware
-from core.middleware.validation import ValidationMiddleware
 from example.consumers import ChatConsumer
 from example.database import ChatDatabase
+from fastapi_channel.backends import MemoryBackend, RedisBackend
+from fastapi_channel.config import Settings
+from fastapi_channel.connections import ConnectionManager, ConnectionRegistry
+from fastapi_channel.middleware import LoggingMiddleware, ValidationMiddleware
 
 
 class TestWebSocketIntegration:
@@ -772,7 +769,7 @@ async def test_cleanup_performance(monkeypatch):
     await backend.connect()
 
     try:
-        redis_client = backend.redis
+        redis_client = await backend.redis
         assert redis_client is not None
         connections_key = f"{backend.channel_prefix}registry:connections"
 

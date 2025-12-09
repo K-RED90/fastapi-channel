@@ -1,7 +1,7 @@
 [project]
-name = "agentcore"
+name = "fastapi-channel"
 version = "0.1.0"
-description = "WebSocket chat system with comprehensive features"
+description = "FastAPI Channel - high-performance, distributed WebSocket messaging"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,7 +21,7 @@ python_functions = "test_*"
 addopts = "-v --tb=short"
 
 [tool.hatch.build.targets.wheel]
-packages = ["core", "example"]
+packages = ["fastapi_channel", "example"]
 
 [tool.ruff]
 line-length = 100

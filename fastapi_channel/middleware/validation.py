@@ -1,8 +1,8 @@
 import json
 
-from core.exceptions import ValidationError, create_error_context
-from core.middleware.base import Middleware
-from core.typed import Message
+from fastapi_channel.exceptions import ValidationError, create_error_context
+from fastapi_channel.middleware import Middleware
+from fastapi_channel.typed import Message
 
 
 class ValidationMiddleware(Middleware):

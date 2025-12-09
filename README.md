@@ -1,6 +1,6 @@
-# AgentCore
+# FastAPI Channel
 
-A high-performance, distributed WebSocket messaging system built with FastAPI. AgentCore provides a robust foundation for real-time applications with support for single-server and multi-server deployments, group messaging, connection management, and extensible middleware.
+A high-performance, distributed WebSocket messaging system built with FastAPI. FastAPI Channel provides a robust foundation for real-time applications with support for single-server and multi-server deployments, group messaging, connection management, and extensible middleware.
 
 ## Features
 
@@ -219,14 +219,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 
-from core.backends.redis import RedisBackend
-from core.config import Settings
-from core.connections.manager import ConnectionManager
-from core.connections.registry import ConnectionRegistry
-from core.exceptions import BaseError
-from core.middleware.logging import LoggingMiddleware
-from core.middleware.rate_limit import RateLimitMiddleware
-from core.middleware.validation import ValidationMiddleware
+from fastapi_channel.backends.redis import RedisBackend
+from fastapi_channel.config import Settings
+from fastapi_channel.connections.manager import ConnectionManager
+from fastapi_channel.connections.registry import ConnectionRegistry
+from fastapi_channel.exceptions import BaseError
+from fastapi_channel.middleware.logging import LoggingMiddleware
+from fastapi_channel.middleware.rate_limit import RateLimitMiddleware
+from fastapi_channel.middleware.validation import ValidationMiddleware
 from example.consumers import ChatConsumer
 from example.database import ChatDatabase
 

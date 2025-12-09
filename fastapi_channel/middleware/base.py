@@ -3,11 +3,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from core.connections.state import Connection
-from core.typed import Message
+from fastapi_channel.connections import Connection
+from fastapi_channel.typed import Message
 
 if TYPE_CHECKING:
-    from core.consumer.base import BaseConsumer
+    from fastapi_channel.consumer import BaseConsumer
 
 
 class Middleware(ABC):

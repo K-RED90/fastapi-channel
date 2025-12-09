@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from core.serializers.base import BaseSerializer
+from fastapi_channel.serializers import BaseSerializer
 
 
 class JSONSerializer(BaseSerializer):

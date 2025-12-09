@@ -1,5 +1,5 @@
 def main():
-    print("Hello from agentcore!")
+    print("Hello from FastAPI Channel!")
 
 
 if __name__ == "__main__":

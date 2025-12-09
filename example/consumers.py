@@ -1,13 +1,13 @@
 import time
 from typing import TYPE_CHECKING, Any
 
-from core.consumer.base import BaseConsumer
-from core.typed import Message
+from fastapi_channel.consumer.base import BaseConsumer
+from fastapi_channel.typed import Message
 
 if TYPE_CHECKING:
-    from core.connections.manager import ConnectionManager
-    from core.connections.state import Connection
-    from core.middleware.base import Middleware
+    from fastapi_channel.connections.manager import ConnectionManager
+    from fastapi_channel.connections.state import Connection
+    from fastapi_channel.middleware.base import Middleware
 
 
 class ChatConsumer(BaseConsumer):
