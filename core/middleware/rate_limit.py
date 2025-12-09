@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Set
 
 from core.exceptions import RateLimitError
 from core.middleware.base import Middleware
@@ -217,6 +217,7 @@ class RateLimitMiddleware(Middleware):
         burst_size: int = 100,
         redis: "Redis | None" = None,
         key_prefix: str = "ratelimit:",
+        excluded_message_types: Set[str] | None = None,
     ):
         super().__init__(next_middleware)
         self.messages_per_window = messages_per_window
@@ -224,6 +225,7 @@ class RateLimitMiddleware(Middleware):
         self.burst_size = burst_size
         self.redis = redis
         self.key_prefix = key_prefix
+        self.excluded_message_types = excluded_message_types or set()
 
         # Use Redis-based limiter if Redis is provided, otherwise use in-memory
         if redis is not None:
@@ -251,7 +253,7 @@ class RateLimitMiddleware(Middleware):
         return True
 
     async def process(self, message, connection, consumer):
-        if message.type in {"ping", "pong"}:
+        if message.type in self.excluded_message_types:
             return message
 
         key = connection.channel_name

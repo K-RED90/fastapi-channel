@@ -49,9 +49,19 @@ middleware = (
     ValidationMiddleware(settings.WS_MAX_MESSAGE_SIZE)
     >> LoggingMiddleware()
     >> RateLimitMiddleware(
-        messages_per_window=10,
+        messages_per_window=3,
         window_seconds=60,
         redis=Redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True),
+        excluded_message_types={
+            "ping",
+            "pong",
+            "welcome",
+            "room_users",
+            "message_history",
+            "typing_start",
+            "typing_stop",
+            "list_rooms"
+        },
     )
 )
 

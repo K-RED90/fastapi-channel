@@ -357,12 +357,9 @@ class RedisBackend(BaseBackend):
         Group key remains in Redis even when empty.
 
         """
-        if not self.redis:
-            return
-        assert self.redis is not None
+        redis_client: Any = await self.redis
 
         group_key = f"{self.channel_prefix}group:{group}"
-        redis_client: Any = self.redis
         await redis_client.srem(group_key, channel)
 
     async def group_channels(self, group: str) -> set[str]:
