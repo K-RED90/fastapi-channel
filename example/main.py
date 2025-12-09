@@ -21,7 +21,7 @@ from core.middleware.validation import ValidationMiddleware
 from example.consumers import ChatConsumer
 from example.database import ChatDatabase
 
-settings = Settings()
+settings = Settings(WS_HEARTBEAT_INTERVAL=5)
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),

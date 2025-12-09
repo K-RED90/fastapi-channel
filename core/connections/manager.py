@@ -77,6 +77,8 @@ class ConnectionManager:
 
     """
 
+    logger = logging.getLogger(__name__)
+
     def __init__(
         self,
         registry: ConnectionRegistry,
@@ -84,6 +86,7 @@ class ConnectionManager:
         heartbeat_interval: int = 30,
         server_instance_id: str | None = None,
         log_stats: bool = True,
+        enable_heartbeat: bool = True,
     ):
         self._registry = registry
         self._receiver_tasks: dict[str, asyncio.Task] = {}
@@ -94,13 +97,13 @@ class ConnectionManager:
         self.max_connections_per_client = max_connections_per_client
         self.heartbeat_interval = heartbeat_interval
         self._broadcast_channel = "__broadcast__"
-        # Generate server instance ID if not provided
+
         self.server_instance_id = server_instance_id or self._generate_instance_id()
         self.log_stats = log_stats
+        self.enable_heartbeat = enable_heartbeat
 
     @staticmethod
     def _generate_instance_id() -> str:
-        """Generate a unique server instance ID."""
         import uuid
 
         return f"server-{uuid.uuid4().hex[:12]}"
@@ -475,7 +478,7 @@ class ConnectionManager:
 
         connection_stats = await self.backend.cleanup_stale_connections(self.server_instance_id)
         group_stats = await self.backend.cleanup_orphaned_group_members()
-        logging.info(
+        self.logger.info(
             "Redis cleanup completed: connections_removed=%s user_mappings_cleaned=%s "
             "orphaned_members_removed=%s empty_groups_removed=%s",
             connection_stats["connections_removed"],
@@ -484,7 +487,9 @@ class ConnectionManager:
             group_stats["empty_groups_removed"],
         )
 
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        if self.enable_heartbeat:
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
         if self.log_stats:
             self._stats_task = asyncio.create_task(self._stats_loop())
 
@@ -580,7 +585,9 @@ class ConnectionManager:
         try:
             await self.backend.cleanup()
         except Exception:
-            pass  # Best effort cleanup
+            self.logger.exception("Failed to cleanup backend")
+        finally:
+            self.logger.info("Backend cleanup completed")
 
     async def _heartbeat_loop(self) -> None:
         while self._running:
@@ -602,7 +609,9 @@ class ConnectionManager:
                     try:
                         await self.backend.registry_refresh_ttl(conn.channel_name, conn.user_id)
                     except Exception:
-                        pass  # Best effort - don't fail heartbeat if TTL refresh fails
+                        self.logger.warning(
+                            "Failed to refresh TTL for connection %s", conn.channel_name
+                        )  # Best effort - don't fail heartbeat if TTL refresh fails
                     return None
 
                 async for batch in self.registry.iter_connections(batch_size=100):
@@ -640,7 +649,7 @@ class ConnectionManager:
                         if c.user_id:
                             unique_users.add(c.user_id)
 
-                logging.info(
+                self.logger.info(
                     "[ws] stats connections=%s users=%s messages=%s bytes=%s",
                     total_connections,
                     len(unique_users),

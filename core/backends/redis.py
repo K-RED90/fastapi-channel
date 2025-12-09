@@ -119,8 +119,8 @@ class RedisBackend(BaseBackend):
         self.retry_max_attempts = retry_max_attempts
         self.retry_base_delay = retry_base_delay
         self.retry_max_delay = retry_max_delay
-        self.redis: Redis | None = None
-        self.pubsub: PubSub | None = None
+        self._redis: Redis | None = None
+        self._pubsub: PubSub | None = None
         self._listener_task: asyncio.Task | None = None
         self._pending_receives: dict[str, list[asyncio.Future]] = defaultdict(list)
         self._connection_pool: ConnectionPool | None = None
@@ -163,8 +163,22 @@ class RedisBackend(BaseBackend):
             decode_responses=not self.serializer.binary,
         )
 
-        self.redis = Redis(connection_pool=self._connection_pool)
-        self.pubsub = self.redis.pubsub()
+        self._redis = Redis(connection_pool=self._connection_pool)
+        self._pubsub = self._redis.pubsub()
+
+    @property
+    async def redis(self) -> Redis:
+        if self._redis is None:
+            await self.connect()
+        assert self._redis is not None
+        return self._redis
+
+    @property
+    async def pubsub(self) -> PubSub:
+        if self._pubsub is None:
+            await self.connect()
+        assert self._pubsub is not None
+        return self._pubsub
 
     def _get_retry_decorator(self):
         return with_retry(
@@ -193,17 +207,13 @@ class RedisBackend(BaseBackend):
         Uses retry logic with exponential backoff for reliability.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
+        redis_client: Redis = await self.redis
         full_channel = f"{self.channel_prefix}{channel}"
         serialized = self.serializer.dumps(message)
 
         @self._get_retry_decorator()
         async def _publish() -> None:
-            assert self.redis is not None
-            await self.redis.publish(full_channel, serialized)
+            await redis_client.publish(full_channel, serialized)
 
         await _publish()
 
@@ -222,16 +232,13 @@ class RedisBackend(BaseBackend):
         Uses retry logic with exponential backoff for reliability.
 
         """
-        if not self.pubsub:
-            await self.connect()
-        assert self.pubsub is not None
+        pubsub: PubSub = await self.pubsub
 
         full_channel = f"{self.channel_prefix}{channel}"
 
         @self._get_retry_decorator()
         async def _subscribe() -> None:
-            assert self.pubsub is not None
-            await self.pubsub.subscribe(full_channel)
+            await pubsub.subscribe(full_channel)
 
         await _subscribe()
 
@@ -252,11 +259,10 @@ class RedisBackend(BaseBackend):
         No-op if not currently subscribed.
 
         """
-        if not self.pubsub:
-            return
+        pubsub: PubSub = await self.pubsub
 
         full_channel = f"{self.channel_prefix}{channel}"
-        await self.pubsub.unsubscribe(full_channel)
+        await pubsub.unsubscribe(full_channel)
 
     async def group_send(
         self, group: str, message: dict[str, Any], exclude_channel: str | None = None
@@ -280,12 +286,9 @@ class RedisBackend(BaseBackend):
         If exclude_channel is provided, that channel will not receive the message.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
+        redis_client: Redis = await self.redis
 
         serialized = self.serializer.dumps(message)
-        redis_client: Any = self.redis
 
         # Stream group members in batches and use pipeline for each batch
         async for batch in self.group_channels_stream(group, batch_size=100):
@@ -326,12 +329,9 @@ class RedisBackend(BaseBackend):
         Group key gets TTL on first channel addition.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
 
         group_key = f"{self.channel_prefix}group:{group}"
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
 
         if self.group_expiry is not None:
             pipe = redis_client.pipeline()
@@ -387,12 +387,9 @@ class RedisBackend(BaseBackend):
         loading all members into memory at once.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
 
         group_key = f"{self.channel_prefix}group:{group}"
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         members = await redis_client.smembers(group_key)
         return {m.decode() if isinstance(m, (bytes, bytearray)) else m for m in members}
 
@@ -428,12 +425,9 @@ class RedisBackend(BaseBackend):
         ...         await backend.publish(channel, message)
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
 
         group_key = f"{self.channel_prefix}group:{group}"
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         cursor = 0
 
         while True:
@@ -445,10 +439,9 @@ class RedisBackend(BaseBackend):
                 break
 
     async def _listen(self) -> None:
-        if not self.pubsub:
-            return
+        pubsub: PubSub = await self.pubsub
 
-        async for message in self.pubsub.listen():
+        async for message in pubsub.listen():
             if message["type"] == "message":
                 channel = message["channel"].replace(self.channel_prefix, "")
                 data = self.serializer.loads(message["data"])
@@ -511,10 +504,10 @@ class RedisBackend(BaseBackend):
         Used primarily for testing and development.
 
         """
-        if self.redis:
-            pattern = f"{self.channel_prefix}*"
-            async for key in self.redis.scan_iter(match=pattern):
-                await self.redis.delete(key)
+        redis_client: Redis = await self.redis
+        pattern = f"{self.channel_prefix}*"
+        async for key in redis_client.scan_iter(match=pattern):
+            await redis_client.delete(key)
         # Cancel any pending receives
         for channel_futures in self._pending_receives.values():
             for future in channel_futures:
@@ -529,18 +522,18 @@ class RedisBackend(BaseBackend):
         and disconnects the connection pool.
         Should be called during application shutdown.
         """
-        if self._listener_task:
+        if self._listener_task and not self._listener_task.done():
             self._listener_task.cancel()
             try:
                 await self._listener_task
             except asyncio.CancelledError:
                 pass
 
-        if self.pubsub:
-            await self.pubsub.close()
+        pubsub: PubSub = await self.pubsub
+        await pubsub.close()
 
-        if self.redis:
-            await self.redis.close()
+        redis_client: Redis = await self.redis
+        await redis_client.close()
 
         if self._connection_pool:
             await self._connection_pool.disconnect()
@@ -578,11 +571,7 @@ class RedisBackend(BaseBackend):
         Maintains bidirectional user-connection mappings.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         await redis_client.sadd(self._registry_key("connections"), connection_id)
         connection_key = self._registry_key("connection", connection_id)
         await redis_client.hset(
@@ -643,11 +632,7 @@ class RedisBackend(BaseBackend):
         Uses Redis Lua script for true atomicity across all server instances.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         connections_key = self._registry_key("connections")
         connection_key = self._registry_key("connection", connection_id)
         user_key = self._registry_key("user", user_id) if user_id else None
@@ -732,11 +717,7 @@ class RedisBackend(BaseBackend):
         Cleans up user-connection mappings.
 
         """
-        if not self.redis:
-            return
-        assert self.redis is not None
-
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         await redis_client.srem(self._registry_key("connections"), connection_id)
         await redis_client.delete(self._registry_key("connection", connection_id))
         if user_id:
@@ -758,11 +739,7 @@ class RedisBackend(BaseBackend):
         Refreshes TTL if configured.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         connection_key = self._registry_key("connection", connection_id)
         await redis_client.hset(
             connection_key,
@@ -791,25 +768,21 @@ class RedisBackend(BaseBackend):
 
         """
         if self.registry_expiry is None:
+            print(
+                "Registry expiry is not configured, skipping TTL refresh for connection %s",
+                connection_id,
+            )
             return
 
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         pipe = redis_client.pipeline()
 
-        # Refresh all relevant keys
         pipe.expire(self._registry_key("connections"), self.registry_expiry)
         pipe.expire(self._registry_key("connection", connection_id), self.registry_expiry)
         if user_id:
             pipe.expire(self._registry_key("user", user_id), self.registry_expiry)
 
-        try:
-            await pipe.execute()
-        except Exception:
-            pass  # Best effort - don't fail if refresh fails
+        await pipe.execute()
 
     async def registry_get_connection_groups(self, connection_id: str) -> set[str]:
         """Get groups for a connection from Redis registry.
@@ -830,11 +803,7 @@ class RedisBackend(BaseBackend):
         Returns empty set if connection not found or JSON invalid.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         groups_data = await redis_client.hget(
             self._registry_key("connection", connection_id), "groups"
         )
@@ -859,11 +828,7 @@ class RedisBackend(BaseBackend):
         Includes connections from all server instances.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         return int(await redis_client.scard(self._registry_key("connections")))
 
     async def registry_get_user_connections(self, user_id: str) -> set[str]:
@@ -888,11 +853,7 @@ class RedisBackend(BaseBackend):
         with many connections to avoid loading all into memory.
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         members = await redis_client.smembers(self._registry_key("user", user_id))
         return {m.decode() if isinstance(m, (bytes, bytearray)) else str(m) for m in members}
 
@@ -928,12 +889,8 @@ class RedisBackend(BaseBackend):
         ...         await backend.publish(conn_id, message)
 
         """
-        if not self.redis:
-            await self.connect()
-        assert self.redis is not None
-
         user_key = self._registry_key("user", user_id)
-        redis_client: Any = self.redis
+        redis_client: Any = await self.redis
         cursor = 0
 
         while True:
@@ -981,11 +938,7 @@ class RedisBackend(BaseBackend):
         """
 
         async def _run() -> CleanupStats:
-            if not self.redis:
-                await self.connect()
-            assert self.redis is not None
-
-            redis_client: Any = self.redis
+            redis_client: Any = await self.redis
             connections_key = self._registry_key("connections")
             stats: CleanupStats = {"connections_removed": 0, "user_mappings_cleaned": 0}
             cursor = 0
@@ -1088,11 +1041,7 @@ class RedisBackend(BaseBackend):
         self, timeout: float | None = 30
     ) -> OrphanedGroupMembersStats:
         async def _run() -> OrphanedGroupMembersStats:
-            if not self.redis:
-                await self.connect()
-            assert self.redis is not None
-
-            redis_client: Any = self.redis
+            redis_client: Any = await self.redis
             stats: OrphanedGroupMembersStats = {
                 "orphaned_members_removed": 0,
                 "empty_groups_removed": 0,

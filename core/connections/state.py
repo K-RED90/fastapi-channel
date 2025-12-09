@@ -51,10 +51,6 @@ class Connection:
         Total bytes sent to this connection. Default: 0
     bytes_received : int, optional
         Total bytes received from this connection. Default: 0
-    ip_address : str, optional
-        Client IP address. Default: ""
-    user_agent : str, optional
-        Client user agent string. Default: ""
     heartbeat_timeout : float, optional
         Heartbeat timeout in seconds. Default: 60.0
     heartbeat : HeartbeatMonitor, optional
@@ -93,8 +89,6 @@ class Connection:
     message_count: int = 0
     bytes_sent: int = 0
     bytes_received: int = 0
-    ip_address: str = ""
-    user_agent: str = ""
     heartbeat_timeout: float = 60.0
     heartbeat: HeartbeatMonitor = field(default_factory=HeartbeatMonitor)
     state: ConnectionState = ConnectionState.CONNECTED
@@ -209,6 +203,4 @@ class Connection:
             "message_count": self.message_count,
             "bytes_sent": self.bytes_sent,
             "bytes_received": self.bytes_received,
-            "ip_address": self.ip_address,
-            "user_agent": self.user_agent,
         }

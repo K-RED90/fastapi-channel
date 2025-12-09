@@ -217,7 +217,9 @@ class ConnectionRegistry:
         """
         return list(self.connections.values())
 
-    async def iter_connections(self, batch_size: int = 100) -> AsyncIterator[tuple[Connection, ...]]:
+    async def iter_connections(
+        self, batch_size: int = 100
+    ) -> AsyncIterator[tuple[Connection, ...]]:
         """Stream connections in batches to avoid loading all into memory.
 
         Parameters

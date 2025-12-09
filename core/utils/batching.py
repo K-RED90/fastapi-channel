@@ -14,7 +14,9 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
-def batch_items(items: Iterable[T], batch_size: int, strict: bool = False) -> Iterator[tuple[T, ...]]:
+def batch_items(
+    items: Iterable[T], batch_size: int, strict: bool = False
+) -> Iterator[tuple[T, ...]]:
     """Split an iterable into batches of specified size.
 
     Parameters
@@ -35,13 +37,13 @@ def batch_items(items: Iterable[T], batch_size: int, strict: bool = False) -> It
     [(1, 2), (3, 4), (5,)]
 
     """
-    
+
     if batch_size < 1:
-        raise ValueError('n must be at least one')
+        raise ValueError("n must be at least one")
     iterator = iter(items)
     while batch := tuple(islice(iterator, batch_size)):
         if strict and len(batch) != batch_size:
-            raise ValueError('batch_items(): incomplete batch')
+            raise ValueError("batch_items(): incomplete batch")
         yield batch
 
 
