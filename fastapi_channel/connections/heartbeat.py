@@ -2,7 +2,7 @@ import time
 from dataclasses import dataclass, field
 
 
-@dataclass
+@dataclass(slots=True)
 class HeartbeatMonitor:
     interval: int = 30
     timeout: int = 60

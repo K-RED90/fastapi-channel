@@ -17,7 +17,7 @@ class MessagePriority(Enum):
     LOW = "low"
 
 
-@dataclass
+@dataclass(slots=True)
 class Message:
     """Represents a WebSocket message with metadata and delivery options.
 

@@ -21,7 +21,7 @@ from fastapi_channel.connections import ConnectionManager, ConnectionRegistry
 from fastapi_channel.exceptions import BaseError
 from fastapi_channel.middleware import LoggingMiddleware, RateLimitMiddleware, ValidationMiddleware
 
-settings = Settings()
+settings = Settings(BACKEND_TYPE="redis")
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),

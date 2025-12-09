@@ -10,7 +10,7 @@ class ChatDatabase:
 
     def __init__(self):
         # Use :memory: for in-memory database
-        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self.conn = sqlite3.connect("db.sqlite3", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row  # Enable column access by name
         self.lock = threading.Lock()
         self._init_db()

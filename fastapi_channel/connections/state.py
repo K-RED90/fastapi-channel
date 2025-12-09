@@ -13,7 +13,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-@dataclass(init=True)
+@dataclass(init=True, slots=True)
 class Connection:
     """Represents an active WebSocket connection with metadata and state.
 
