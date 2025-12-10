@@ -888,6 +888,18 @@
                     }
                     break;
                     
+                case 'announcement':
+                    addSystemMessage(`📢 ${payload.message || message.message}`);
+                    break;
+
+                case 'notification':
+                    addSystemMessage(`🔔 ${payload.message || message.message}`);
+                    break;
+
+                case 'test_group_message':
+                    addSystemMessage(`📋 Group Message: ${JSON.stringify(payload.data || message.data)}`);
+                    break;
+
                 case 'error':
                     showError(payload.message || message.message);
                     break;

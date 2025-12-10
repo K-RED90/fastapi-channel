@@ -5,7 +5,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
+class WSConfig(BaseSettings):
     """Application configuration settings for the WebSocket chat system.
 
     This class manages all configurable parameters for the WebSocket backend,
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
         Unique identifier for this server instance in distributed deployments.
         If not set, auto-generated on startup. Default: None (auto-generated)
 
-    LOG_LEVEL : str
+    LOG_LEVEL : Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
         Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Default: "INFO"
 
     Examples
@@ -98,7 +98,7 @@ class Settings(BaseSettings):
 
     SERVER_INSTANCE_ID: str | None = None
 
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 

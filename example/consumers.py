@@ -5,6 +5,7 @@ from fastapi_channel.consumer.base import BaseConsumer
 from fastapi_channel.typed import Message
 
 if TYPE_CHECKING:
+    from fastapi_channel.channel_layer import ChannelLayer
     from fastapi_channel.connections.manager import ConnectionManager
     from fastapi_channel.connections.state import Connection
     from fastapi_channel.middleware.base import Middleware
@@ -16,13 +17,19 @@ class ChatConsumer(BaseConsumer):
     def __init__(
         self,
         connection: "Connection",
-        manager: "ConnectionManager",
+        manager: "ConnectionManager | None" = None,
+        channel_layer: "ChannelLayer | None" = None,
         middleware_stack: "Middleware | None" = None,
         database: Any = None,
         *args,
         **kwargs,
     ):
-        super().__init__(connection, manager, middleware_stack)
+        super().__init__(
+            connection,
+            manager=manager,
+            channel_layer=channel_layer,
+            middleware_stack=middleware_stack,
+        )
         # Typing indicators stored in-memory per consumer instance
         # NOTE: For production multi-server deployments, consider using Redis backend
         # to store typing indicators for cross-server synchronization
@@ -65,7 +72,7 @@ class ChatConsumer(BaseConsumer):
             }
         )
 
-    async def disconnect(self, code: int) -> None:
+    async def on_disconnect(self, code: int) -> None:
         connection_id = self.connection.channel_name
         user_id = self.connection.user_id or connection_id
 
@@ -93,8 +100,6 @@ class ChatConsumer(BaseConsumer):
                     "timestamp": self.timestamp,
                 },
             )
-
-        await super().disconnect(code)
 
     async def receive(self, message: Message) -> None:
         """Handle received messages"""

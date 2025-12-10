@@ -1,11 +1,14 @@
 import json
 from abc import abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi_channel.connections import Connection, ConnectionManager
 from fastapi_channel.exceptions import BaseError, ValidationError, create_error_context
 from fastapi_channel.middleware import Middleware
 from fastapi_channel.typed import Message, MessagePriority
+
+if TYPE_CHECKING:
+    from fastapi_channel.channel_layer import ChannelLayer
 
 
 class BaseConsumer:
@@ -31,10 +34,20 @@ class BaseConsumer:
     ----------
     connection : Connection
         WebSocket connection state and metadata
-    manager : ConnectionManager
-        Manager for connection lifecycle and messaging
+    manager : ConnectionManager | None, optional
+        Manager for connection lifecycle and messaging. If None, must provide channel_layer.
+        Default: None
+    channel_layer : ChannelLayer | None, optional
+        ChannelLayer instance. If provided, manager is extracted automatically.
+        Default: None
     middleware_stack : Middleware | None, optional
         Message processing middleware chain. Default: None
+
+    Notes
+    -----
+    Either `manager` or `channel_layer` must be provided. If both are provided,
+    `manager` takes precedence. If `channel_layer` is provided, the manager
+    is extracted from it automatically.
 
     Examples
     --------
@@ -49,25 +62,37 @@ class BaseConsumer:
     ...         if message.type == "chat":
     ...             await self.send_to_group("general", message)
     ...
-    ...     async def disconnect(self, code: int) -> None:
+    ...     async def on_disconnect(self, code: int) -> None:
     ...         await self.leave_group("general")
 
     Notes
     -----
-    Subclasses must implement connect(), disconnect(), and receive() methods.
+    Subclasses must implement connect(), on_disconnect(), and receive() methods.
     Messages are automatically parsed from JSON and validated.
     Heartbeat messages ("pong") are handled automatically.
+    The disconnect() method is provided by BaseConsumer and handles both
+    consumer cleanup (via on_disconnect()) and connection manager disconnection.
 
     """
 
     def __init__(
         self,
         connection: Connection,
-        manager: ConnectionManager,
+        manager: ConnectionManager | None = None,
+        channel_layer: "ChannelLayer | None" = None,
         middleware_stack: Middleware | None = None,
     ):
+        if manager is None and channel_layer is None:
+            raise ValueError("Either 'manager' or 'channel_layer' must be provided")
+
         self.connection = connection
-        self.manager = manager
+        if manager is not None:
+            self.manager = manager
+        elif channel_layer is not None:
+            self.manager = channel_layer.manager
+        else:
+            raise ValueError("Either 'manager' or 'channel_layer' must be provided")
+
         self.middleware_stack = middleware_stack
 
     @abstractmethod
@@ -89,19 +114,50 @@ class BaseConsumer:
 
         """
 
+    async def disconnect(self, code: int = 1000) -> None:
+        """Disconnect the WebSocket connection and perform cleanup.
+
+        This method handles both consumer-specific cleanup and connection manager
+        disconnection. Subclasses should override `on_disconnect()` for custom cleanup.
+
+        Parameters
+        ----------
+        code : int, optional
+            WebSocket close code (e.g., 1000 for normal closure). Default: 1000
+
+        Notes
+        -----
+        This method:
+        1. Calls `on_disconnect()` for consumer-specific cleanup
+        2. Disconnects from the connection manager (handles WebSocket closure, group cleanup, etc.)
+
+        Subclasses should override `on_disconnect()` instead of `disconnect()` to add
+        custom cleanup logic.
+
+        """
+        await self.on_disconnect(code)
+        await self.manager.disconnect(self.connection.channel_name, code=code)
+
     @abstractmethod
-    async def disconnect(self, code: int) -> None:
-        """Called when WebSocket connection is closed.
+    async def on_disconnect(self, code: int) -> None:
+        """Hook for consumer-specific cleanup when connection is closed.
 
         Parameters
         ----------
         code : int
             WebSocket close code (e.g., 1000 for normal closure)
 
-        Implement this method to perform cleanup tasks such as:
+        Override this method to perform cleanup tasks such as:
         - Leaving subscribed groups
         - Cleaning up connection-specific resources
         - Logging disconnection events
+        - Updating database state
+
+        Notes
+        -----
+        This method is called before the connection manager disconnects the WebSocket.
+        The manager will handle group cleanup automatically, but you can perform
+        additional cleanup here if needed.
 
         """
 

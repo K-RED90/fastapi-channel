@@ -87,11 +87,9 @@ class TestRedisIntegration:
 
                 except WebSocketDisconnect:
                     await consumer.disconnect(1000)
-                    await manager.disconnect(connection.channel_name)
                 except Exception as e:
                     print(f"Error: {e}")
                     await consumer.disconnect(1011)
-                    await manager.disconnect(connection.channel_name)
 
             yield app, manager, consumers, backend, database
 
