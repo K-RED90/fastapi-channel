@@ -64,16 +64,21 @@ class TestWebSocketIntegration:
 
                 # Message handling loop
                 while True:
-                    raw_message = await websocket.receive_text()
-                    await consumer.handle_message(raw_message)
+                    message = await websocket.receive()
+                    if "text" in message:
+                        json_str = message["text"]
+                        await consumer.handle_message(json_str=json_str)
+                    elif "bytes" in message:
+                        binary = message["bytes"]
+                        await consumer.handle_message(binary=binary)
+                    else:
+                        continue
 
             except WebSocketDisconnect:
                 await consumer.disconnect(1000)
-                await manager.disconnect(connection.channel_name)
             except Exception as e:
                 print(f"Error: {e}")
                 await consumer.disconnect(1011)
-                await manager.disconnect(connection.channel_name)
 
         return app, manager, consumers, backend, database
 

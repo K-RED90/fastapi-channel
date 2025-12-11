@@ -7,52 +7,42 @@ with an embedded HTML frontend.
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 
 from example.consumers import ChatConsumer
 from example.database import ChatDatabase
-from fastapi_channel.backends import MemoryBackend, RedisBackend
-from fastapi_channel.config import Settings
-from fastapi_channel.connections import ConnectionManager, ConnectionRegistry
+from example.external_events import (
+    get_channel_layer_status,
+    send_broadcast_announcement,
+    send_test_group_message,
+    send_test_message_to_room,
+    send_test_notification_to_user,
+)
+from fastapi_channel import ChannelLayer
+from fastapi_channel.config import WSConfig
 from fastapi_channel.exceptions import BaseError
 from fastapi_channel.middleware import LoggingMiddleware, RateLimitMiddleware, ValidationMiddleware
 
-settings = Settings(BACKEND_TYPE="redis")
+ws_config = WSConfig(BACKEND_TYPE="redis")
 
 logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+    level=getattr(logging, ws_config.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-if settings.BACKEND_TYPE == "redis":
-    backend = RedisBackend(
-        redis_url=settings.REDIS_URL,
-        registry_expiry=settings.REDIS_REGISTRY_EXPIRY,
-        group_expiry=settings.REDIS_GROUP_EXPIRY,
-    )
-else:
-    backend = MemoryBackend()
 
-registry = ConnectionRegistry(
-    backend=backend,
-    max_connections=settings.MAX_TOTAL_CONNECTIONS,
-    heartbeat_timeout=settings.WS_HEARTBEAT_TIMEOUT,
-)
-manager = ConnectionManager(
-    registry=registry,
-    max_connections_per_client=settings.MAX_CONNECTIONS_PER_CLIENT,
-    heartbeat_interval=settings.WS_HEARTBEAT_INTERVAL,
-)
+channel_layer = ChannelLayer(config=ws_config)
 middleware = (
-    ValidationMiddleware(settings.WS_MAX_MESSAGE_SIZE)
+    ValidationMiddleware(ws_config.WS_MAX_MESSAGE_SIZE)
     >> LoggingMiddleware()
     >> RateLimitMiddleware(
         messages_per_window=3,
         window_seconds=60,
-        redis=Redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True),
+        redis=Redis.from_url(ws_config.REDIS_URL, encoding="utf-8", decode_responses=True),
         excluded_message_types={
             "ping",
             "pong",
@@ -76,9 +66,9 @@ with open(template_path, encoding="utf-8") as f:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown handlers"""
-    await manager.start_tasks()
+    await channel_layer.start()
     yield
-    await manager.stop_tasks()
+    await channel_layer.stop()
     db.close()
 
 
@@ -95,11 +85,11 @@ app.add_middleware(
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    connection = await manager.connect(websocket=websocket, user_id=user_id)
+    connection = await channel_layer.connect(websocket=websocket, user_id=user_id)
 
     consumer = ChatConsumer(
         connection=connection,
-        manager=manager,
+        channel_layer=channel_layer,
         middleware_stack=middleware,
         database=db,
     )
@@ -108,22 +98,27 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         await consumer.connect()
 
         while True:
-            raw_message = await websocket.receive_text()
-            await consumer.handle_message(raw_message)
+            message = await websocket.receive()
+            if "text" in message:
+                json_str = message["text"]
+                await consumer.handle_message(json_str=json_str)
+            elif "bytes" in message:
+                binary = message["bytes"]
+                await consumer.handle_message(binary=binary)
+            else:
+                # Unknown message type, skip
+                continue
 
     except WebSocketDisconnect:
         await consumer.disconnect(1000)
-        await manager.disconnect(connection.channel_name)
     except BaseError as e:
         if e.should_disconnect():
             code = e.ws_code
             await consumer.disconnect(code)
-            await manager.disconnect(connection.channel_name, code=code)
         else:
             await consumer.handle_error(e)
     except Exception:
         await consumer.disconnect(1011)
-        await manager.disconnect(connection.channel_name)
 
 
 @app.get("/api/rooms/{room_name}/messages")
@@ -134,6 +129,47 @@ async def get_room_messages(room_name: str, limit: int = 50):
 
     messages = db.get_recent_messages(room_name, limit=limit)
     return {"room": room_name, "messages": messages, "count": len(messages)}
+
+
+@app.post("/api/announce", summary="Test endpoint to send a broadcast announcement.")
+async def test_broadcast_announcement(message: str):
+    await send_broadcast_announcement(message)
+    return {"status": "sent", "message": message}
+
+
+@app.post("/api/room/{room_name}/message")
+async def test_room_message(
+    room_name: str, user_id: str = Query(min_length=1), text: str = Query(min_length=1)
+):
+    await send_test_message_to_room(room_name, user_id, text)
+    return {
+        "status": "sent",
+        "room": room_name.strip(),
+        "user_id": user_id.strip(),
+        "text": text.strip(),
+    }
+
+
+@app.post(
+    "/api/user/{user_id}/notification",
+    summary="Test endpoint to send a notification to a specific user.",
+)
+async def test_user_notification(user_id: str, message: str = Query(min_length=1)):
+    await send_test_notification_to_user(user_id, message)
+    return {"status": "sent", "user_id": user_id.strip(), "message": message.strip()}
+
+
+@app.post("/api/group/{group_name}/message", summary="Test endpoint to send a message to a group.")
+async def test_group_message(
+    group_name: str, data: dict[str, Any] = Body(..., example={"message": "Hello, world!"})
+):
+    await send_test_group_message(group_name, data)
+    return {"status": "sent", "group": group_name.strip(), "data": data}
+
+
+@app.get("/api/status", summary="Test endpoint to get channel layer status.")
+async def test_channel_status():
+    return get_channel_layer_status()
 
 
 @app.get("/", response_class=HTMLResponse)
