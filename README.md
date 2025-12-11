@@ -251,34 +251,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 
-from fastapi_channel import ChannelLayer, get_channel_layer
-from fastapi_channel.config import WSConfig
-from fastapi_channel.exceptions import BaseError
-from fastapi_channel.middleware.logging import LoggingMiddleware
-from fastapi_channel.middleware.rate_limit import RateLimitMiddleware
-from fastapi_channel.middleware.validation import ValidationMiddleware
+from fastapi_channels import ChannelLayer, get_channel_layer
+from fastapi_channels.config import WSConfig
+from fastapi_channels.exceptions import BaseError
+from fastapi_channels.middleware import LoggingMiddleware, RateLimitMiddleware, ValidationMiddleware
 from example.consumers import ChatConsumer
 from example.database import ChatDatabase
 
 # Load configuration from environment
-settings = WSConfig()
+ws_config = WSConfig()
 
 logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+    level=getattr(logging, ws_config.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
 # Unified channel layer (automatically selects MemoryBackend or RedisBackend based on config)
-channel_layer = ChannelLayer(config=settings)
+channel_layer = ChannelLayer(config=ws_config)
 
 # Build middleware chain
 middleware = (
-    ValidationMiddleware(settings.WS_MAX_MESSAGE_SIZE)
+    ValidationMiddleware(ws_config.WS_MAX_MESSAGE_SIZE)
     >> LoggingMiddleware()
     >> RateLimitMiddleware(
         messages_per_window=3,
         window_seconds=60,
-        redis=Redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True),
+        redis=Redis.from_url(ws_config.REDIS_URL, encoding="utf-8", decode_responses=True),
         excluded_message_types={
             "ping",
             "pong",
@@ -335,17 +333,23 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         await consumer.connect()
 
         while True:
-            raw_message = await websocket.receive_text()
-            await consumer.handle_message(raw_message)
+            message = await websocket.receive()
+            if "text" in message:
+                json_str = message["text"]
+                await consumer.handle_message(json_str=json_str)
+            elif "bytes" in message:
+                binary = message["bytes"]
+                await consumer.handle_message(binary=binary)
+            else:
+                # Unknown message type, skip
+                continue
 
     except WebSocketDisconnect:
         await consumer.disconnect(1000)
-        await manager.disconnect(connection.channel_name)
     except BaseError as e:
         if e.should_disconnect():
             code = e.ws_code
             await consumer.disconnect(code)
-            await manager.disconnect(connection.channel_name, code=code)
         else:
             await consumer.handle_error(e)
     except Exception:
