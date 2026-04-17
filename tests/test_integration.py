@@ -10,8 +10,9 @@ from redis.asyncio import Redis
 
 from example.consumers import ChatConsumer
 from example.database import ChatDatabase
+from fastapi_channels.backends import RedisBackend
 from fastapi_channels.config import WSConfig
-from fastapi_channels.connections import ConnectionManager
+from fastapi_channels.connections import ConnectionManager, ConnectionRegistry
 from fastapi_channels.middleware import LoggingMiddleware, ValidationMiddleware
 
 
@@ -438,7 +439,7 @@ class TestWebSocketIntegration:
         for ws in connections:
             try:
                 ws.close()
-            except:
+            except Exception:
                 pass  # Ignore cleanup errors in test
 
     @pytest.mark.asyncio
@@ -446,9 +447,6 @@ class TestWebSocketIntegration:
         """Test message handling under high load conditions"""
         app, manager, consumers, backend, database = setup_app
         client = TestClient(app)
-
-        # Test with larger messages (up to 1MB)
-        large_message = "x" * (1024 * 1024)  # 1MB message
 
         with client.websocket_connect("/ws/user1") as ws1:
             # Skip welcome
@@ -545,7 +543,8 @@ class TestWebSocketIntegration:
             # Create multiple rooms to test group limits
             created_rooms = []
 
-            # Create up to 1000 rooms to test scalability (well under 3M+ limit but enough for testing)
+            # Create up to 1000 rooms to test scalability
+            # (well under 3M+ limit but enough for testing)
             for i in range(100):
                 room_name = f"test_room_{i}"
                 ws1.send_text(
@@ -576,7 +575,6 @@ class TestWebSocketIntegration:
     async def test_large_group_operations(self, setup_app):
         """Test operations on large groups with many channels"""
         app, manager, consumers, backend, database = setup_app
-        client = TestClient(app)
 
         # Test group operations with many channels
         loop = asyncio.new_event_loop()
@@ -643,7 +641,7 @@ class TestWebSocketIntegration:
                     response = json.loads(ws1.receive_text())
                     if response["type"] == "chat_message":
                         received_count += 1
-                except:
+                except Exception:
                     break
 
             end_time = time.time()
@@ -752,7 +750,7 @@ async def test_startup_cleanup_handles_failures_gracefully(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_performance(monkeypatch):
+async def test_cleanup_performance():
     """Cleanup should handle many stale connections within a reasonable time."""
     redis_url = "redis://localhost:6379/0"
     ping_client = Redis.from_url(redis_url)

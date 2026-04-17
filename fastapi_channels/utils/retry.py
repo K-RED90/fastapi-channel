@@ -11,7 +11,7 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 
-def with_retry(
+def with_retry(  # noqa: C901
     max_retries: int = 3,
     base_delay: float = 0.1,
     max_delay: float = 2.0,
@@ -54,7 +54,7 @@ def with_retry(
     """
     logger = logging.getLogger(__name__)
 
-    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:  # noqa: C901
         is_async = inspect.iscoroutinefunction(func)
 
         if is_async:

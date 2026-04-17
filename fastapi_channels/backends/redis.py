@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable
 from typing import TYPE_CHECKING, Any, Optional, TypeVar
@@ -10,16 +11,16 @@ from redis.asyncio.connection import ConnectionPool
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from fastapi_channels.serializers import JSONSerializer
-from fastapi_channels.utils import with_retry
-
+from ..serializers import JSONSerializer
+from ..utils import with_retry
 from .base import BaseBackend, CleanupStats, OrphanedGroupMembersStats
 
 if TYPE_CHECKING:
-    from fastapi_channels.serializers import BaseSerializer
+    from ..serializers import BaseSerializer
 
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 class RedisBackend(BaseBackend):
@@ -122,7 +123,11 @@ class RedisBackend(BaseBackend):
         self._redis: Redis | None = None
         self._pubsub: PubSub | None = None
         self._listener_task: asyncio.Task | None = None
-        self._pending_receives: dict[str, list[asyncio.Future]] = defaultdict(list)
+        self._channel_queues: dict[str, asyncio.Queue[dict[str, Any]]] = defaultdict(
+            lambda: asyncio.Queue(maxsize=10_000),
+        )
+        self._subscribed_channels: set[str] = set()
+        self._subscription_lock = asyncio.Lock()
         self._connection_pool: ConnectionPool | None = None
 
     async def _with_optional_timeout(self, coro: Awaitable[T], timeout: float | None) -> T:
@@ -232,18 +237,21 @@ class RedisBackend(BaseBackend):
         Uses retry logic with exponential backoff for reliability.
 
         """
-        pubsub: PubSub = await self.pubsub
-
         full_channel = f"{self.channel_prefix}{channel}"
+        async with self._subscription_lock:
+            if full_channel in self._subscribed_channels:
+                return
+            pubsub: PubSub = await self.pubsub
 
-        @self._get_retry_decorator()
-        async def _subscribe() -> None:
-            await pubsub.subscribe(full_channel)
+            @self._get_retry_decorator()
+            async def _subscribe() -> None:
+                await pubsub.subscribe(full_channel)
 
-        await _subscribe()
+            await _subscribe()
+            self._subscribed_channels.add(full_channel)
 
-        if not self._listener_task or self._listener_task.done():
-            self._listener_task = asyncio.create_task(self._listen())
+            if not self._listener_task or self._listener_task.done():
+                self._listener_task = asyncio.create_task(self._listen())
 
     async def unsubscribe(self, channel: str) -> None:
         """Unsubscribe from Redis pub/sub channel.
@@ -259,13 +267,22 @@ class RedisBackend(BaseBackend):
         No-op if not currently subscribed.
 
         """
-        pubsub: PubSub = await self.pubsub
-
         full_channel = f"{self.channel_prefix}{channel}"
-        await pubsub.unsubscribe(full_channel)
+        async with self._subscription_lock:
+            if full_channel not in self._subscribed_channels:
+                return
+            pubsub: PubSub = await self.pubsub
+            await pubsub.unsubscribe(full_channel)
+            self._subscribed_channels.discard(full_channel)
+
+        # Drop buffered messages for unsubscribed channels to avoid stale memory growth.
+        self._channel_queues.pop(channel, None)
 
     async def group_send(
-        self, group: str, message: dict[str, Any], exclude_channel: str | None = None
+        self,
+        group: str,
+        message: dict[str, Any],
+        exclude_channel: str | None = None,
     ) -> None:
         """Send message to all channels in Redis group.
 
@@ -386,10 +403,12 @@ class RedisBackend(BaseBackend):
         group_key = f"{self.channel_prefix}group:{group}"
         redis_client: Any = await self.redis
         members = await redis_client.smembers(group_key)
-        return {m.decode() if isinstance(m, (bytes, bytearray)) else m for m in members}
+        return {m.decode() if isinstance(m, bytes | bytearray) else m for m in members}
 
     async def group_channels_stream(
-        self, group: str, batch_size: int = 100
+        self,
+        group: str,
+        batch_size: int = 100,
     ) -> AsyncIterator[list[str]]:
         """Stream group members using SSCAN to avoid loading all into memory.
 
@@ -427,25 +446,62 @@ class RedisBackend(BaseBackend):
         while True:
             cursor, members = await redis_client.sscan(group_key, cursor, count=batch_size)
             if members:
-                batch = [m.decode() if isinstance(m, (bytes, bytearray)) else m for m in members]
+                batch = [m.decode() if isinstance(m, bytes | bytearray) else m for m in members]
                 yield batch
             if cursor == 0:
                 break
 
-    async def _listen(self) -> None:
+    async def _listen(self) -> None:  # noqa: C901
         pubsub: PubSub = await self.pubsub
 
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                channel = message["channel"].replace(self.channel_prefix, "")
-                data = self.serializer.loads(message["data"])
+        while True:
+            try:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if not message:
+                    continue
+                if message.get("type") != "message":
+                    continue
 
-                # Deliver to pending receive() calls
-                if self._pending_receives.get(channel):
-                    # Pop the first pending future and set its result
-                    future = self._pending_receives[channel].pop(0)
-                    if not future.done():
-                        future.set_result(data)
+                raw_channel = message.get("channel")
+                if isinstance(raw_channel, bytes):
+                    channel = raw_channel.decode("utf-8", errors="replace")
+                elif isinstance(raw_channel, str):
+                    channel = raw_channel
+                else:
+                    continue
+
+                channel = channel.removeprefix(self.channel_prefix)
+                raw_data = message.get("data")
+                if raw_data is None:
+                    continue
+
+                decoded = self.serializer.loads(raw_data)
+                if not isinstance(decoded, dict):
+                    logger.warning(
+                        "Dropped non-dict message for channel '%s' in Redis backend",
+                        channel,
+                    )
+                    continue
+
+                queue = self._channel_queues[channel]
+                try:
+                    queue.put_nowait(decoded)
+                except asyncio.QueueFull:
+                    # Prefer dropping oldest buffered message over unbounded growth.
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    queue.put_nowait(decoded)
+                    logger.warning(
+                        "Queue full for channel '%s'; dropped oldest buffered message",
+                        channel,
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Redis listener loop crashed unexpectedly")
+                await asyncio.sleep(0.2)
 
     async def receive(self, channel: str, timeout: float | None = None) -> dict[str, Any] | None:
         """Receive next message from Redis pub/sub channel.
@@ -464,27 +520,21 @@ class RedisBackend(BaseBackend):
 
         Notes
         -----
-        Creates future and waits for message delivery via _listen task.
-        Automatically subscribes to channel if not already subscribed.
+        Waits for the next queued message delivered by the listener task.
+        Performs a one-time subscribe when the channel is not yet subscribed.
 
         """
-        await self.subscribe(channel)
+        full_channel = f"{self.channel_prefix}{channel}"
+        if full_channel not in self._subscribed_channels:
+            await self.subscribe(channel)
 
-        future: asyncio.Future = asyncio.Future()
-        self._pending_receives[channel].append(future)
-
+        queue = self._channel_queues[channel]
         try:
             if timeout is not None:
-                return await asyncio.wait_for(future, timeout=timeout)
-            return await future
+                return await asyncio.wait_for(queue.get(), timeout=timeout)
+            return await queue.get()
         except TimeoutError:
-            if future in self._pending_receives[channel]:
-                self._pending_receives[channel].remove(future)
             return None
-        except Exception:
-            if future in self._pending_receives[channel]:
-                self._pending_receives[channel].remove(future)
-            raise
 
     async def flush(self) -> None:
         """Clear all Redis keys matching channel prefix.
@@ -502,12 +552,8 @@ class RedisBackend(BaseBackend):
         pattern = f"{self.channel_prefix}*"
         async for key in redis_client.scan_iter(match=pattern):
             await redis_client.delete(key)
-        # Cancel any pending receives
-        for channel_futures in self._pending_receives.values():
-            for future in channel_futures:
-                if not future.done():
-                    future.cancel()
-        self._pending_receives.clear()
+        self._channel_queues.clear()
+        self._subscribed_channels.clear()
 
     async def cleanup(self) -> None:
         """Clean up Redis connections and background tasks.
@@ -523,14 +569,18 @@ class RedisBackend(BaseBackend):
             except asyncio.CancelledError:
                 pass
 
-        pubsub: PubSub = await self.pubsub
-        await pubsub.close()
-
-        redis_client: Redis = await self.redis
-        await redis_client.close()
+        if self._pubsub is not None:
+            await self._pubsub.close()
+            self._pubsub = None
+        if self._redis is not None:
+            await self._redis.close()
+            self._redis = None
+        self._channel_queues.clear()
+        self._subscribed_channels.clear()
 
         if self._connection_pool:
             await self._connection_pool.disconnect()
+            self._connection_pool = None
 
     def _registry_key(self, *parts: str) -> str:
         return f"{self.channel_prefix}registry:{':'.join(parts)}"
@@ -762,8 +812,8 @@ class RedisBackend(BaseBackend):
 
         """
         if self.registry_expiry is None:
-            print(
-                "Registry expiry is not configured, skipping TTL refresh for connection %s",
+            logger.debug(
+                "Registry expiry is not configured; skipping TTL refresh for connection %s",
                 connection_id,
             )
             return
@@ -799,7 +849,8 @@ class RedisBackend(BaseBackend):
         """
         redis_client: Any = await self.redis
         groups_data = await redis_client.hget(
-            self._registry_key("connection", connection_id), "groups"
+            self._registry_key("connection", connection_id),
+            "groups",
         )
         if groups_data:
             try:
@@ -849,10 +900,12 @@ class RedisBackend(BaseBackend):
         """
         redis_client: Any = await self.redis
         members = await redis_client.smembers(self._registry_key("user", user_id))
-        return {m.decode() if isinstance(m, (bytes, bytearray)) else str(m) for m in members}
+        return {m.decode() if isinstance(m, bytes | bytearray) else str(m) for m in members}
 
     async def registry_get_user_connections_stream(
-        self, user_id: str, batch_size: int = 100
+        self,
+        user_id: str,
+        batch_size: int = 100,
     ) -> AsyncIterator[list[str]]:
         """Stream user connections using SSCAN to avoid loading all into memory.
 
@@ -891,7 +944,7 @@ class RedisBackend(BaseBackend):
             cursor, members = await redis_client.sscan(user_key, cursor, count=batch_size)
             if members:
                 batch = [
-                    m.decode() if isinstance(m, (bytes, bytearray)) else str(m) for m in members
+                    m.decode() if isinstance(m, bytes | bytearray) else str(m) for m in members
                 ]
                 yield batch
             if cursor == 0:
@@ -913,16 +966,18 @@ class RedisBackend(BaseBackend):
         """
         return f"{self.channel_prefix}registry:"
 
-    async def cleanup_stale_connections(
-        self, server_instance_id: str, timeout: float | None = 30
+    async def cleanup_stale_connections(  # noqa: C901
+        self,
+        server_instance_id: str,
+        timeout: float | None = 30,
     ) -> CleanupStats:
-        """Remove stale connection registry entries for other servers or expired TTLs.
+        """Remove stale connection registry entries.
 
         Parameters
         ----------
         server_instance_id : str
-            Identifier for the current server instance. Connections associated
-            with a different server instance are treated as stale.
+            Identifier for the current server instance. Kept for interface
+            compatibility and metrics correlation.
 
         Returns
         -------
@@ -931,7 +986,7 @@ class RedisBackend(BaseBackend):
 
         """
 
-        async def _run() -> CleanupStats:
+        async def _run() -> CleanupStats:  # noqa: C901
             redis_client: Any = await self.redis
             connections_key = self._registry_key("connections")
             stats: CleanupStats = {"connections_removed": 0, "user_mappings_cleaned": 0}
@@ -940,10 +995,12 @@ class RedisBackend(BaseBackend):
 
             while True:
                 cursor, raw_conn_ids = await redis_client.sscan(
-                    connections_key, cursor=cursor, count=batch_size
+                    connections_key,
+                    cursor=cursor,
+                    count=batch_size,
                 )
                 conn_ids = [
-                    cid.decode() if isinstance(cid, (bytes, bytearray)) else str(cid)
+                    cid.decode() if isinstance(cid, bytes | bytearray) else str(cid)
                     for cid in raw_conn_ids
                 ]
                 if not conn_ids and cursor == 0:
@@ -967,41 +1024,28 @@ class RedisBackend(BaseBackend):
                         continue
 
                     decoded_data = {
-                        (k.decode() if isinstance(k, (bytes, bytearray)) else str(k)): (
-                            v.decode() if isinstance(v, (bytes, bytearray)) else v
+                        (k.decode() if isinstance(k, bytes | bytearray) else str(k)): (
+                            v.decode() if isinstance(v, bytes | bytearray) else v
                         )
                         for k, v in data.items()
                     }
 
-                    metadata_raw = decoded_data.get("metadata") or ""
                     user_id_raw = decoded_data.get("user_id") or ""
                     groups_raw = decoded_data.get("groups") or "[]"
-
-                    try:
-                        metadata = json.loads(metadata_raw) if metadata_raw else {}
-                    except json.JSONDecodeError:
-                        metadata = {}
 
                     try:
                         groups_list = json.loads(groups_raw) if groups_raw else []
                     except json.JSONDecodeError:
                         groups_list = []
 
-                    stored_instance = metadata.get("server_instance_id")
-
                     ttl_stale = False
                     if self.registry_expiry is not None:
                         # ttl < 0 means missing/expired (includes no-ttl and expired)
                         ttl_stale = ttl is None or ttl <= 0
 
-                    # Connections without instance metadata or belonging to a different
-                    # server instance are considered stale regardless of TTL to prevent
-                    # accumulation after crashes/restarts.
-                    instance_stale = (
-                        stored_instance is None or stored_instance != server_instance_id
-                    )
-
-                    if ttl_stale or instance_stale:
+                    # Only remove entries that are truly stale (missing hash or expired TTL).
+                    # Never purge entries from other healthy server instances.
+                    if ttl_stale:
                         user_id = user_id_raw or None
                         stale_entries.append((conn_id, user_id, groups_list))
 
@@ -1031,10 +1075,11 @@ class RedisBackend(BaseBackend):
 
         return await self._with_optional_timeout(_run(), timeout)
 
-    async def cleanup_orphaned_group_members(
-        self, timeout: float | None = 30
+    async def cleanup_orphaned_group_members(  # noqa: C901
+        self,
+        timeout: float | None = 30,
     ) -> OrphanedGroupMembersStats:
-        async def _run() -> OrphanedGroupMembersStats:
+        async def _run() -> OrphanedGroupMembersStats:  # noqa: C901
             redis_client: Any = await self.redis
             stats: OrphanedGroupMembersStats = {
                 "orphaned_members_removed": 0,
@@ -1047,7 +1092,9 @@ class RedisBackend(BaseBackend):
 
             while True:
                 cursor, group_keys = await redis_client.scan(
-                    cursor=cursor, match=pattern, count=100
+                    cursor=cursor,
+                    match=pattern,
+                    count=100,
                 )
                 if not group_keys and cursor == 0:
                     break
@@ -1055,17 +1102,19 @@ class RedisBackend(BaseBackend):
                 for raw_group_key in group_keys:
                     group_key = (
                         raw_group_key.decode()
-                        if isinstance(raw_group_key, (bytes, bytearray))
+                        if isinstance(raw_group_key, bytes | bytearray)
                         else str(raw_group_key)
                     )
 
                     member_cursor = 0
                     while True:
                         member_cursor, members = await redis_client.sscan(
-                            group_key, cursor=member_cursor, count=batch_size
+                            group_key,
+                            cursor=member_cursor,
+                            count=batch_size,
                         )
                         members_str = [
-                            m.decode() if isinstance(m, (bytes, bytearray)) else str(m)
+                            m.decode() if isinstance(m, bytes | bytearray) else str(m)
                             for m in members
                         ]
 
@@ -1076,7 +1125,7 @@ class RedisBackend(BaseBackend):
                             exists_results = await pipe.execute()
 
                             delete_pipe = redis_client.pipeline()
-                            for member, exists in zip(members_str, exists_results):
+                            for member, exists in zip(members_str, exists_results, strict=False):
                                 if not exists:
                                     delete_pipe.srem(group_key, member)
                                     stats["orphaned_members_removed"] += 1

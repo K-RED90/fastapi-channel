@@ -1,14 +1,18 @@
-import logging
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from fastapi_channels.exceptions import RateLimitError
-from fastapi_channels.middleware import Middleware
+from loguru import logger
+
+from ..exceptions import BaseError, ErrorContext, RateLimitError, create_error_context
+from ..redis_namespace import app_redis_key
+from . import Middleware
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
-logger = logging.getLogger(__name__)
+    from ..connections import Connection
+    from ..typed import Message
 
 
 class TokenBucketRateLimiter:
@@ -78,12 +82,17 @@ class RedisRateLimiter:
         redis: "Redis",
         rate: int,
         window_seconds: int,
-        key_prefix: str = "ratelimit:",
+        key_prefix: str | None = None,
+        redis_app_namespace: str | None = None,
     ):
         self.redis = redis
         self.rate = rate
         self.window = window_seconds
-        self.key_prefix = key_prefix
+        self.key_prefix = (
+            key_prefix
+            if key_prefix is not None
+            else f"{app_redis_key('ratelimit', namespace=redis_app_namespace)}:"
+        )
 
         # Lua script for atomic sliding window rate limiting
         # This script:
@@ -194,6 +203,12 @@ class RateLimitMiddleware(Middleware):
         Redis client for distributed rate limiting. Default: None (in-memory)
     key_prefix : str, optional
         Redis key prefix. Default: "ratelimit:"
+    key_fn : Callable[[Message, Connection], str] | None, optional
+        Custom function to compute the rate-limit key. Defaults to connection.channel_name.
+    error_cls : type[BaseError] | None, optional
+        Error class to raise when rate limit is exceeded. Defaults to RateLimitError.
+    error_factory : Callable[[str, Connection, Message, ErrorContext], BaseError] | None
+        Factory for building a custom error instance. If provided, takes precedence over error_cls.
 
     Examples
     --------
@@ -216,16 +231,28 @@ class RateLimitMiddleware(Middleware):
         window_seconds: int = 60,
         burst_size: int = 100,
         redis: "Redis | None" = None,
-        key_prefix: str = "ratelimit:",
+        key_prefix: str | None = None,
+        redis_app_namespace: str | None = None,
         excluded_message_types: set[str] | None = None,
+        key_fn: Callable[["Message", "Connection"], str] | None = None,
+        error_cls: Callable[..., BaseError] | None = None,
+        error_factory: Callable[[str, "Connection", "Message", ErrorContext], BaseError]
+        | None = None,
     ):
         super().__init__(next_middleware)
         self.messages_per_window = messages_per_window
         self.window_seconds = window_seconds
         self.burst_size = burst_size
         self.redis = redis
-        self.key_prefix = key_prefix
+        self.key_prefix = (
+            key_prefix
+            if key_prefix is not None
+            else f"{app_redis_key('ratelimit', namespace=redis_app_namespace)}:"
+        )
         self.excluded_message_types = excluded_message_types or set()
+        self.key_fn = key_fn
+        self.error_cls = error_cls or RateLimitError
+        self.error_factory = error_factory
 
         # Use Redis-based limiter if Redis is provided, otherwise use in-memory
         if redis is not None:
@@ -234,6 +261,7 @@ class RateLimitMiddleware(Middleware):
                 rate=self.messages_per_window,
                 window_seconds=self.window_seconds,
                 key_prefix=self.key_prefix,
+                redis_app_namespace=redis_app_namespace,
             )
             self._memory_limiter = None
         else:
@@ -256,10 +284,8 @@ class RateLimitMiddleware(Middleware):
         if message.type in self.excluded_message_types:
             return message
 
-        key = connection.channel_name
+        key = self.key_fn(message, connection) if self.key_fn else connection.channel_name
         if not await self._check_rate_limit(key):
-            from fastapi_channels.exceptions import create_error_context
-
             context = create_error_context(
                 user_id=connection.user_id,
                 connection_id=connection.channel_name,
@@ -267,8 +293,10 @@ class RateLimitMiddleware(Middleware):
                 component="rate_limit_middleware",
                 rate_limit_key=key,
             )
-            logger.warning("Rate limit exceeded for %s", key)
-            raise RateLimitError(
+            logger.warning(f"Rate limit exceeded for {key}")
+            if self.error_factory:
+                raise self.error_factory(key, connection, message, context)
+            raise self.error_cls(
                 "Rate limit exceeded",
                 context=context,
             )

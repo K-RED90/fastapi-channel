@@ -121,7 +121,10 @@ class BaseBackend(ABC):
 
     @abstractmethod
     async def group_send(
-        self, group: str, message: dict[str, Any], exclude_channel: str | None = None
+        self,
+        group: str,
+        message: dict[str, Any],
+        exclude_channel: str | None = None,
     ) -> None:
         """Send a message to all channels in a group.
 
@@ -306,7 +309,7 @@ class BaseBackend(ABC):
 
         """
 
-    async def registry_refresh_ttl(self, connection_id: str, user_id: str | None = None) -> None:
+    async def registry_refresh_ttl(self, connection_id: str, user_id: str | None = None) -> None:  # noqa: B027
         """Refresh TTL for connection registry keys to prevent premature expiry.
 
         Parameters
@@ -427,7 +430,11 @@ class BaseBackend(ABC):
         if count >= max_connections:
             return False
         await self.registry_add_connection(
-            connection_id, user_id, metadata, groups, heartbeat_timeout
+            connection_id,
+            user_id,
+            metadata,
+            groups,
+            heartbeat_timeout,
         )
         return True
 
@@ -463,7 +470,9 @@ class BaseBackend(ABC):
         return False
 
     async def cleanup_stale_connections(
-        self, server_instance_id: str, timeout: float | None = 30
+        self,
+        server_instance_id: str,
+        timeout: float | None = 30,
     ) -> CleanupStats:
         """Clean up stale connections.
 
@@ -478,7 +487,8 @@ class BaseBackend(ABC):
         return CleanupStats(connections_removed=0, user_mappings_cleaned=0)
 
     async def cleanup_orphaned_group_members(
-        self, timeout: float | None = 30
+        self,
+        timeout: float | None = 30,
     ) -> OrphanedGroupMembersStats:
         """Clean up orphaned group members.
 

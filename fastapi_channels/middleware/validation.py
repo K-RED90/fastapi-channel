@@ -1,8 +1,8 @@
-import json
+import orjson
 
-from fastapi_channels.exceptions import ValidationError, create_error_context
-from fastapi_channels.middleware import Middleware
-from fastapi_channels.typed import Message
+from ..exceptions import ValidationError, create_error_context
+from ..typed import Message
+from . import Middleware
 
 
 class ValidationMiddleware(Middleware):
@@ -12,7 +12,9 @@ class ValidationMiddleware(Middleware):
 
     async def process(self, message: Message, connection, consumer) -> Message | None:
         try:
-            size = len(json.dumps(message.to_dict()))
+            size = len(
+                orjson.dumps(message.to_dict(), option=orjson.OPT_NON_STR_KEYS).decode("utf-8"),
+            )
             if size > self.max_message_size:
                 context = create_error_context(
                     user_id=connection.user_id,
@@ -39,7 +41,7 @@ class ValidationMiddleware(Middleware):
             raise ValidationError(
                 f"Validation failed: {exc!s}",
                 context=context,
-            )
+            ) from exc
 
         if message.is_expired():
             return None

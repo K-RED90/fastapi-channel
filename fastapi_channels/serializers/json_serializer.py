@@ -1,9 +1,7 @@
-from __future__ import annotations
-
 import json
 from typing import Any
 
-from fastapi_channels.serializers import BaseSerializer
+from . import BaseSerializer
 
 
 class JSONSerializer(BaseSerializer):

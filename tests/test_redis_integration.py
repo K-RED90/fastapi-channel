@@ -1,3 +1,4 @@
+import contextlib
 import json
 from unittest.mock import patch
 
@@ -20,7 +21,7 @@ class TestRedisIntegration:
     async def redis_app(self):
         """Setup FastAPI app with Redis backend"""
         # Mock Redis for testing (since we may not have Redis running)
-        with patch("fastapi_channel.backends.redis.Redis") as mock_redis_class:
+        with patch("fastapi_channels.backends.redis.Redis") as mock_redis_class:
             mock_redis = mock_redis_class.return_value
             # Configure mock to behave like Redis
             mock_redis.get.return_value = None
@@ -89,8 +90,7 @@ class TestRedisIntegration:
 
                 except WebSocketDisconnect:
                     await consumer.disconnect(1000)
-                except Exception as e:
-                    print(f"Error: {e}")
+                except Exception:
                     await consumer.disconnect(1011)
 
             yield app, manager, consumers, backend, database
@@ -98,7 +98,7 @@ class TestRedisIntegration:
     @pytest.mark.asyncio
     async def test_redis_backend_initialization(self, redis_app):
         """Test Redis backend initializes correctly"""
-        app, manager, consumers, backend, database = redis_app
+        _app, _manager, _consumers, backend, _database = redis_app
 
         assert isinstance(backend, RedisBackend)
         assert backend.redis_url == "redis://localhost:6379/0"
@@ -107,7 +107,7 @@ class TestRedisIntegration:
     @pytest.mark.asyncio
     async def test_redis_full_chat_flow(self, redis_app):
         """Test complete chat flow with Redis backend"""
-        app, manager, consumers, backend, database = redis_app
+        app, _manager, _consumers, _backend, _database = redis_app
 
         # Create test client
         client = TestClient(app)
@@ -172,7 +172,7 @@ class TestRedisIntegration:
     @pytest.mark.asyncio
     async def test_redis_group_operations_at_scale(self, redis_app):
         """Test Redis group operations with larger scale"""
-        app, manager, consumers, backend, database = redis_app
+        app, _manager, _consumers, _backend, _database = redis_app
         client = TestClient(app)
 
         # Test creating multiple rooms with Redis backend
@@ -216,7 +216,7 @@ class TestRedisIntegration:
     @pytest.mark.asyncio
     async def test_redis_connection_limits(self, redis_app):
         """Test connection limits with Redis backend"""
-        app, manager, consumers, backend, database = redis_app
+        app, _manager, _consumers, _backend, _database = redis_app
         client = TestClient(app)
 
         # Test per-user connection limits
@@ -225,7 +225,7 @@ class TestRedisIntegration:
         connections = []
         try:
             # Try to create multiple connections for same user
-            for i in range(max_connections_per_user + 2):  # Try to exceed limit
+            for _i in range(max_connections_per_user + 2):  # Try to exceed limit
                 try:
                     ws = client.websocket_connect("/ws/test_user")
                     connections.append(ws)
@@ -240,15 +240,13 @@ class TestRedisIntegration:
         finally:
             # Cleanup connections
             for ws in connections:
-                try:
+                with contextlib.suppress(BaseException):
                     ws.close()
-                except:
-                    pass
 
     @pytest.mark.asyncio
     async def test_redis_message_broadcast(self, redis_app):
         """Test message broadcasting with Redis backend"""
-        app, manager, consumers, backend, database = redis_app
+        app, _manager, _consumers, _backend, _database = redis_app
         client = TestClient(app)
 
         # Connect multiple users
@@ -290,7 +288,7 @@ class TestRedisIntegration:
                     if response["type"] == "chat_message":
                         assert response["text"] == "Redis broadcast test!"
                         received_count += 1
-                except:
+                except Exception:
                     pass  # Some connections may timeout
 
             # Should have broadcast to most users
@@ -299,10 +297,8 @@ class TestRedisIntegration:
         finally:
             # Cleanup
             for ws in connections:
-                try:
+                with contextlib.suppress(BaseException):
                     ws.close()
-                except:
-                    pass
 
     @pytest.mark.asyncio
     async def test_redis_large_messages(self, redis_app):
@@ -338,7 +334,7 @@ class TestRedisIntegration:
     @pytest.mark.asyncio
     async def test_redis_backend_resilience(self, redis_app):
         """Test Redis backend resilience and error handling"""
-        app, manager, consumers, backend, database = redis_app
+        _app, _manager, _consumers, backend, _database = redis_app
 
         # Test that backend operations handle Redis unavailability gracefully
         # (In this mock setup, we're testing the interface contract)
@@ -348,7 +344,7 @@ class TestRedisIntegration:
         assert result is True  # Should succeed with mock
 
         channels = await backend.group_channels("resilience_test")
-        assert isinstance(channels, list) or isinstance(channels, set)
+        assert isinstance(channels, (list, set))
 
         # Test registry operations
         result = await backend.registry_add_connection_if_under_limit("user1", "conn1", 10)

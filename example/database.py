@@ -35,7 +35,7 @@ class ChatDatabase:
             )
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_room_timestamp 
+            CREATE INDEX IF NOT EXISTS idx_room_timestamp
             ON messages(room, timestamp)
         """)
         # Users table
@@ -70,11 +70,11 @@ class ChatDatabase:
             )
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_rooms_user 
+            CREATE INDEX IF NOT EXISTS idx_user_rooms_user
             ON user_rooms(user_id)
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_rooms_room 
+            CREATE INDEX IF NOT EXISTS idx_user_rooms_room
             ON user_rooms(room_name)
         """)
         self.conn.commit()
@@ -97,7 +97,10 @@ class ChatDatabase:
             cursor = self.conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO messages (room, user_id, username, text, timestamp, message_type, filename, mime_type, file_size, file_data)
+                INSERT INTO messages (
+                    room, user_id, username, text, timestamp,
+                    message_type, filename, mime_type, file_size, file_data
+                )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
@@ -135,7 +138,8 @@ class ChatDatabase:
             else:
                 cursor.execute(
                     """
-                    SELECT room, user_id, username, text, timestamp, message_type, filename, mime_type, file_size, file_data
+                    SELECT room, user_id, username, text, timestamp,
+                    message_type, filename, mime_type, file_size, file_data
                     FROM messages
                     WHERE room = ?
                     ORDER BY timestamp ASC
@@ -175,7 +179,8 @@ class ChatDatabase:
             cursor = self.conn.cursor()
             cursor.execute(
                 """
-                SELECT room, user_id, username, text, timestamp, message_type, filename, mime_type, file_size, file_data
+                SELECT room, user_id, username, text, timestamp,
+                message_type, filename, mime_type, file_size, file_data
                 FROM messages
                 WHERE room = ?
                 ORDER BY timestamp DESC
@@ -338,7 +343,10 @@ class ChatDatabase:
             cursor = self.conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO rooms (room_name, created_at, created_by, creator_username, is_public, user_count)
+                INSERT OR REPLACE INTO rooms (
+                    room_name, created_at, created_by, creator_username,
+                    is_public, user_count
+                )
                 VALUES (?, ?, ?, ?, ?, 0)
             """,
                 (room_name, created_at, created_by, creator_username, 1 if is_public else 0),
@@ -379,7 +387,8 @@ class ChatDatabase:
             if is_public is not None:
                 cursor.execute(
                     """
-                    SELECT room_name, created_at, created_by, creator_username, is_public, user_count
+                    SELECT room_name, created_at, created_by, creator_username,
+                    is_public, user_count
                     FROM rooms
                     WHERE is_public = ?
                     ORDER BY created_at DESC
@@ -389,7 +398,8 @@ class ChatDatabase:
             else:
                 cursor.execute(
                     """
-                    SELECT room_name, created_at, created_by, creator_username, is_public, user_count
+                    SELECT room_name, created_at, created_by, creator_username,
+                    is_public, user_count
                     FROM rooms
                     ORDER BY created_at DESC
                 """

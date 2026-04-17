@@ -65,7 +65,9 @@ class ChatConsumer(BaseConsumer):
         await self.send_json(
             {
                 "type": "welcome",
-                "message": f"Welcome to the chat, {username}! Create or join a room to start chatting.",
+                "message": (
+                    f"Welcome to the chat, {username}! Create or join a room to start chatting."
+                ),
                 "user_id": user_id,
                 "username": username,
                 "timestamp": self.timestamp,
@@ -101,7 +103,7 @@ class ChatConsumer(BaseConsumer):
                 },
             )
 
-    async def receive(self, message: Message) -> None:
+    async def receive(self, message: Message) -> None:  # noqa: C901
         """Handle received messages"""
         msg_type = message.type
 
@@ -372,7 +374,7 @@ class ChatConsumer(BaseConsumer):
             }
         )
 
-    async def handle_create_room(self, message: Message) -> None:
+    async def handle_create_room(self, message: Message) -> None:  # noqa: C901
         """Handle room creation"""
         room_name = message.data.get("room_name", "").strip()
         is_public = message.data.get("is_public", True)
