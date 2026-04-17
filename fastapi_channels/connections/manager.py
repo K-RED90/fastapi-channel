@@ -24,6 +24,18 @@ if TYPE_CHECKING:
 _manager_instance: "ConnectionManager | None" = None
 
 
+def reset_connection_manager_singleton() -> None:
+    """Clear the ConnectionManager singleton so a new instance can be created.
+
+    Used by tests when another module has already constructed ``ConnectionManager``
+    with different configuration; the singleton decorator would otherwise return
+    the existing instance without re-running ``__init__``.
+    """
+    global _manager_instance
+    _manager_instance = None
+    ConnectionManager._reset_singleton_instance()
+
+
 def _resolve_redis_channel_prefix(config: WSConfig) -> str:
     if config.REDIS_CHANNEL_PREFIX is not None:
         return config.REDIS_CHANNEL_PREFIX

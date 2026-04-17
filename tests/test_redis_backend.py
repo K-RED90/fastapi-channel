@@ -67,6 +67,10 @@ async def test_cleanup_stale_connections_by_server_id(backend_factory):
             heartbeat_timeout=30,
         )
 
+        # Drop the stale connection hash while it remains listed in the connections set.
+        r = await backend.redis
+        await r.delete(backend._registry_key("connection", "conn-stale"))
+
         stats = await backend.cleanup_stale_connections(server_instance_id="srv-a")
 
         assert stats["connections_removed"] == 1
@@ -94,8 +98,9 @@ async def test_cleanup_stale_connections_by_ttl(backend_factory):
         # Remove TTLs to simulate missing/expired TTL metadata
         conn_key = f"{backend.channel_prefix}registry:connection:conn-expired"
         connections_key = f"{backend.channel_prefix}registry:connections"
-        await backend.redis.persist(conn_key)
-        await backend.redis.persist(connections_key)
+        r = await backend.redis
+        await r.persist(conn_key)
+        await r.persist(connections_key)
 
         stats = await backend.cleanup_stale_connections(server_instance_id="srv-a")
 
@@ -142,8 +147,9 @@ async def test_cleanup_orphaned_group_members(backend_factory):
         await backend.group_add("room", "conn-valid")
 
         # Add orphaned members
-        await backend.redis.sadd(f"{backend.channel_prefix}group:room", "ghost")
-        await backend.redis.sadd(f"{backend.channel_prefix}group:orphan", "ghost2")
+        r = await backend.redis
+        await r.sadd(f"{backend.channel_prefix}group:room", "ghost")
+        await r.sadd(f"{backend.channel_prefix}group:orphan", "ghost2")
 
         stats = await backend.cleanup_orphaned_group_members()
 
@@ -152,7 +158,7 @@ async def test_cleanup_orphaned_group_members(backend_factory):
         assert "ghost" not in members
 
         # Orphan-only group should be removed
-        orphan_exists = await backend.redis.exists(f"{backend.channel_prefix}group:orphan")
+        orphan_exists = await r.exists(f"{backend.channel_prefix}group:orphan")
         assert orphan_exists == 0
 
         assert stats["orphaned_members_removed"] >= 1
@@ -167,11 +173,12 @@ async def test_cleanup_empty_groups(backend_factory):
     """Groups with only orphaned members are removed."""
     backend = await backend_factory(registry_expiry=30, group_expiry=30)
     try:
-        await backend.redis.sadd(f"{backend.channel_prefix}group:lonely", "ghost")
+        r = await backend.redis
+        await r.sadd(f"{backend.channel_prefix}group:lonely", "ghost")
 
         stats = await backend.cleanup_orphaned_group_members()
 
-        exists = await backend.redis.exists(f"{backend.channel_prefix}group:lonely")
+        exists = await r.exists(f"{backend.channel_prefix}group:lonely")
         assert exists == 0
         assert stats["empty_groups_removed"] >= 1
     finally:
@@ -201,8 +208,9 @@ async def test_concurrent_cleanup_safe(backend_factory):
 
         conn_key = f"{shared_prefix}registry:connection:conn-stale"
         connections_key = f"{shared_prefix}registry:connections"
-        await backend_a.redis.persist(conn_key)
-        await backend_a.redis.persist(connections_key)
+        ra = await backend_a.redis
+        await ra.persist(conn_key)
+        await ra.persist(connections_key)
 
         results = await asyncio.gather(
             backend_a.cleanup_stale_connections(server_instance_id="srv-a"),
