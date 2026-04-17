@@ -86,7 +86,7 @@ class LoadTester:
             await self._cleanup()
 
         end_time = time.time()
-        print(".2f")
+        print(f"Total elapsed: {end_time - start_time:.2f}s")
         return self.stats
 
     async def _establish_connections(self):
@@ -158,7 +158,9 @@ class LoadTester:
             active_connections = [ws for ws in self.connections if ws and ws.state != State.CLOSED]
             if not active_connections:
                 if len(self.stats.errors) < 1000:
-                    self.stats.errors.append(f"No active connections available for group {group_id}")
+                    self.stats.errors.append(
+                        f"No active connections available for group {group_id}"
+                    )
                 return
 
             # Use the first available connection (they all work the same for this purpose)
@@ -166,10 +168,7 @@ class LoadTester:
 
             create_room_msg = {
                 "type": "create_room",
-                "data": {
-                    "room_name": group_name,
-                    "is_public": True
-                }
+                "data": {"room_name": group_name, "is_public": True},
             }
 
             start_time = time.time()
@@ -285,9 +284,9 @@ class LoadTester:
 
                 if tasks:
                     await asyncio.gather(*tasks, return_exceptions=True)
-                    print(
-                        f"    Closed {min(i + batch_size, len(self.connections))}/{len(self.connections)} connections"
-                    )
+                    closed = min(i + batch_size, len(self.connections))
+                    total = len(self.connections)
+                    print(f"    Closed {closed}/{total} connections")
 
         print("  Cleanup complete.")
 
@@ -307,13 +306,11 @@ def print_load_test_results(stats: LoadTestStats, config: LoadTestConfig):
     print("\nACTUAL RESULTS:")
     print(f"Connections Established: {stats.connections_established:,}")
     print(f"Connections Failed: {stats.connections_failed:,}")
-    print(
-        f"Connection Success Rate: {stats.connections_established / max(1, config.max_connections) * 100:.1f}%"
-    )
+    conn_pct = stats.connections_established / max(1, config.max_connections) * 100
+    print(f"Connection Success Rate: {conn_pct:.1f}%")
     print(f"Groups Created: {stats.groups_created:,}")
-    print(
-        f"Group Creation Success Rate: {stats.groups_created / max(1, config.max_groups) * 100:.1f}%"
-    )
+    group_pct = stats.groups_created / max(1, config.max_groups) * 100
+    print(f"Group Creation Success Rate: {group_pct:.1f}%")
     print(f"Messages Sent: {stats.messages_sent:,}")
     print(f"Messages Received: {stats.messages_received:,}")
     print(

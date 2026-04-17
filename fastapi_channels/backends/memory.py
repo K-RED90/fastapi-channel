@@ -2,8 +2,7 @@ import asyncio
 from collections import defaultdict
 from typing import Any
 
-from fastapi_channels.utils import run_with_concurrency_limit
-
+from ..utils import run_with_concurrency_limit
 from .base import BaseBackend
 
 
@@ -175,7 +174,10 @@ class MemoryBackend(BaseBackend):
             return self._get_group_channels(group)
 
     async def group_send(
-        self, group: str, message: dict[str, Any], exclude_channel: str | None = None
+        self,
+        group: str,
+        message: dict[str, Any],
+        exclude_channel: str | None = None,
     ) -> None:
         """Send message to all channels in a group.
 
@@ -206,7 +208,9 @@ class MemoryBackend(BaseBackend):
 
         tasks = [self.publish(channel, message) for channel in channels]
         results = await run_with_concurrency_limit(
-            tasks, max_concurrent=100, return_exceptions=True
+            tasks,
+            max_concurrent=100,
+            return_exceptions=True,
         )
 
         # Log any exceptions that occurred during publishing
@@ -233,7 +237,9 @@ class MemoryBackend(BaseBackend):
             )
 
     async def get_message(
-        self, channel: str, timeout: float | None = None
+        self,
+        channel: str,
+        timeout: float | None = None,
     ) -> dict[str, Any] | None:
         """Get next message from channel with optional timeout.
 

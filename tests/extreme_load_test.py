@@ -15,9 +15,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-from websockets import ClientConnection, State
 import websockets
+from websockets import ClientConnection, State
 
 
 @dataclass
@@ -96,9 +95,11 @@ class ExtremeLoadWorker:
         connections_to_create = self.config.connections_per_worker
         ramp_up_steps = min(100, connections_to_create)  # Ramp up in batches
 
-        print(
-            f"Worker {self.worker_id}: Starting connection ramp-up ({connections_to_create} connections)"
+        msg = (
+            f"Worker {self.worker_id}: Starting connection ramp-up "
+            f"({connections_to_create} connections)"
         )
+        print(msg)
 
         for step in range(ramp_up_steps):
             batch_size = max(1, connections_to_create // ramp_up_steps)
@@ -116,16 +117,16 @@ class ExtremeLoadWorker:
 
             # Progress reporting
             if (step + 1) % 10 == 0:
+                n = len(self.connections)
                 print(
-                    f"Worker {self.worker_id}: {len(self.connections)}/{connections_to_create} connections established"
+                    f"Worker {self.worker_id}: {n}/{connections_to_create} connections established"
                 )
 
             # Rate limiting for ramp-up
             await asyncio.sleep(self.config.ramp_up_time / ramp_up_steps)
 
-        print(
-            f"Worker {self.worker_id}: Connection ramp-up complete. {len(self.connections)} connections active."
-        )
+        n_conn = len(self.connections)
+        print(f"Worker {self.worker_id}: Connection ramp-up complete. {n_conn} connections active.")
 
     async def _connect_user(self, user_id: int):
         """Connect a single user with error handling"""
@@ -147,7 +148,7 @@ class ExtremeLoadWorker:
         print(f"Worker {self.worker_id}: Creating {self.config.groups_per_worker} groups")
 
         # Use a subset of connections to create groups
-        group_creators = self.connections[:min(100, len(self.connections))]
+        group_creators = self.connections[: min(100, len(self.connections))]
 
         tasks = []
         for i in range(self.config.groups_per_worker):
@@ -160,17 +161,16 @@ class ExtremeLoadWorker:
             if len(tasks) >= 100:
                 await asyncio.gather(*tasks, return_exceptions=True)
                 tasks = []
-                print(
-                    f"Worker {self.worker_id}: Created {i + 1}/{self.config.groups_per_worker} groups"
-                )
+                created = i + 1
+                gpw = self.config.groups_per_worker
+                print(f"Worker {self.worker_id}: Created {created}/{gpw} groups")
 
         # Complete remaining tasks
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        print(
-            f"Worker {self.worker_id}: Group creation complete. {self.stats.groups_created} groups created."
-        )
+        gc = self.stats.groups_created
+        print(f"Worker {self.worker_id}: Group creation complete. {gc} groups created.")
 
     async def _create_single_group(self, websocket, group_id: int):
         """Create a single group via WebSocket message"""
@@ -179,10 +179,7 @@ class ExtremeLoadWorker:
 
             create_room_msg = {
                 "type": "create_room",
-                "data": {
-                    "room_name": group_name,
-                    "is_public": True
-                }
+                "data": {"room_name": group_name, "is_public": True},
             }
 
             start_time = time.time()
@@ -447,10 +444,9 @@ def main():
 
     # Wait for all processes to complete
     print("Waiting for workers to complete...")
-    worker_results = []
     for i, p in enumerate(processes):
         try:
-            result = p.join(
+            p.join(
                 timeout=config.test_duration + config.ramp_up_time + 60
             )  # Extra time for cleanup
             if p.is_alive():

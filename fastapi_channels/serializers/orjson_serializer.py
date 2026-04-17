@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Any
 
 try:
@@ -7,7 +5,7 @@ try:
 except ImportError:
     orjson = None
 
-from fastapi_channels.serializers import BaseSerializer
+from . import BaseSerializer
 
 
 class ORJSONSerializer(BaseSerializer):

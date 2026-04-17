@@ -1,6 +1,6 @@
 import logging
 
-from fastapi_channels.middleware import Middleware
+from . import Middleware
 
 
 class LoggingMiddleware(Middleware):

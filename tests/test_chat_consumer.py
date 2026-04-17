@@ -32,7 +32,6 @@ class TestChatConsumer:
     def test_chat_consumer_creation(self):
         """Test that ChatConsumer can be instantiated"""
         from example.consumers import ChatConsumer
-        from fastapi_channels.backends.memory import MemoryBackend
         from fastapi_channels.middleware.logging import LoggingMiddleware
         from fastapi_channels.middleware.validation import ValidationMiddleware
 
@@ -42,7 +41,6 @@ class TestChatConsumer:
         connection.user_id = "test_user"
 
         manager = Mock()
-        backend = MemoryBackend()
 
         middleware_stack = (
             ValidationMiddleware(max_message_size=10 * 1024 * 1024) | LoggingMiddleware()

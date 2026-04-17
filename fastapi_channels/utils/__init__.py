@@ -16,6 +16,6 @@ __all__ = [
     "batch_items",
     "process_in_batches",
     "run_with_concurrency_limit",
-    "with_retry",
     "singleton",
+    "with_retry",
 ]

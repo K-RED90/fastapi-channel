@@ -21,8 +21,9 @@ class WSConfig(BaseSettings):
     REDIS_URL : str
         Redis connection URL when using Redis backend. Default: "redis://localhost:6379/0"
 
-    REDIS_CHANNEL_PREFIX : str
-        Prefix for Redis pub/sub channels. Default: "ws:"
+    REDIS_CHANNEL_PREFIX : str | None
+        Full channel/registry key prefix (e.g. ``legacy:ws:``). If unset, derived from
+        ``REDIS_APP_NAMESPACE`` (API settings) as ``{namespace}:ws:``.
 
     REDIS_REGISTRY_EXPIRY : int | None
         TTL in seconds for registry keys (connections, users) in Redis.
@@ -86,11 +87,20 @@ class WSConfig(BaseSettings):
 
     """
 
-    BACKEND_TYPE: Literal["memory", "redis"] = "memory"
+    BACKEND_TYPE: Literal["memory", "redis"] = "redis"
     REDIS_URL: str = "redis://localhost:6379/0"
-    REDIS_CHANNEL_PREFIX: str = "ws:"
+    REDIS_APP_NAMESPACE: str | None = None
+    REDIS_CHANNEL_PREFIX: str | None = None
     REDIS_REGISTRY_EXPIRY: int | None = 3600  # TTL in seconds for registry keys
     REDIS_GROUP_EXPIRY: int | None = 3600  # TTL in seconds for group keys
+    REDIS_MAX_CONNECTIONS: int = 200
+    REDIS_SOCKET_TIMEOUT: float = 5.0
+    REDIS_SOCKET_KEEPALIVE: bool = True
+    REDIS_RETRY_ON_TIMEOUT: bool = True
+    REDIS_HEALTH_CHECK_INTERVAL: int = 30
+    REDIS_RETRY_MAX_ATTEMPTS: int = 3
+    REDIS_RETRY_BASE_DELAY: float = 0.1
+    REDIS_RETRY_MAX_DELAY: float = 2.0
 
     WS_HEARTBEAT_INTERVAL: int = 30  # seconds
     WS_HEARTBEAT_TIMEOUT: int = 60  # seconds
@@ -108,7 +118,7 @@ class WSConfig(BaseSettings):
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     LOG_STATS: bool = False
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
     @field_validator("SERVER_INSTANCE_ID", mode="before")
     @classmethod

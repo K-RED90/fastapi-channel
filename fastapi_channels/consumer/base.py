@@ -1,11 +1,12 @@
 import json
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from fastapi_channels.connections import Connection, ConnectionManager
-from fastapi_channels.exceptions import BaseError, ValidationError, create_error_context
-from fastapi_channels.middleware import Middleware
-from fastapi_channels.typed import Message, MessagePriority
+from ..connections import Connection, ConnectionManager
+from ..exceptions import BaseError, ValidationError, create_error_context
+from ..middleware.base import Middleware
+from ..typed import Message
+from .protocol import DefaultProtocolAdapter, ProtocolAdapter
 
 
 class BaseConsumer:
@@ -35,6 +36,9 @@ class BaseConsumer:
         Manager for connection lifecycle and messaging. Required.
     middleware_stack : Middleware | None, optional
         Message processing middleware chain. Default: None
+    protocol_adapter : ProtocolAdapter | None, optional
+        Protocol adapter for parsing inbound messages and formatting errors.
+        Default: DefaultProtocolAdapter
 
     Examples
     --------
@@ -67,6 +71,7 @@ class BaseConsumer:
         connection: Connection,
         manager: ConnectionManager,
         middleware_stack: Middleware | None = None,
+        protocol_adapter: ProtocolAdapter | None = None,
     ):
         if manager is None:
             raise ValueError("'manager' must be provided")
@@ -74,6 +79,7 @@ class BaseConsumer:
         self.connection = connection
         self.manager = manager
         self.middleware_stack = middleware_stack
+        self.protocol_adapter = protocol_adapter or DefaultProtocolAdapter()
 
     @abstractmethod
     async def connect(self) -> None:
@@ -251,6 +257,13 @@ class BaseConsumer:
         self.connection.bytes_sent += len(data)
         self.connection.update_activity()
 
+    async def send_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Send a protocol-formatted event to the connected client."""
+        if not event_type:
+            raise ValueError("event_type must be a non-empty string")
+        payload = self.protocol_adapter.format_event(event_type, data)
+        await self.send_json(payload)
+
     async def join_group(self, group: str) -> None:
         """Add connection to a messaging group.
 
@@ -349,12 +362,10 @@ class BaseConsumer:
             )
 
         if binary is not None:
-            message = Message(
-                type="binary",
-                data=None,
-                binary_data=binary,
-                sender_id=self.connection.channel_name,
-            )
+            message = self.protocol_adapter.parse_binary(binary, self.connection, self)
+            if message is None:
+                return
+
             self.connection.bytes_received += len(binary)
             self.connection.update_activity()
 
@@ -367,58 +378,9 @@ class BaseConsumer:
             return
 
         if json_str is not None:
-            context = create_error_context(
-                user_id=self.connection.user_id,
-                connection_id=self.connection.channel_name,
-                component="consumer",
-            )
-
-            try:
-                json_data = json.loads(json_str)
-            except json.JSONDecodeError as e:
-                raise ValidationError(
-                    message="Invalid JSON format",
-                    error_code="INVALID_JSON",
-                    context=context,
-                    details={"parse_error": str(e)},
-                ) from e
-
-            if not isinstance(json_data, dict):
-                raise ValidationError(
-                    message="JSON message must be an object with a 'type' field",
-                    error_code="INVALID_MESSAGE_FORMAT",
-                    context=context,
-                    details={"received_type": type(json_data).__name__},
-                )
-
-            if "type" not in json_data:
-                raise ValidationError(
-                    message="JSON message missing required 'type'",
-                    error_code="MISSING_MESSAGE_TYPE",
-                    context=context,
-                    details={"payload_keys": list(json_data.keys())},
-                )
-
-            message_type = json_data["type"]
-            if message_type == "pong":
-                self.connection.update_heartbeat()
+            message = self.protocol_adapter.parse_json(json_str, self.connection, self)
+            if message is None:
                 return
-
-            priority_value = json_data.get("priority", MessagePriority.NORMAL.value)
-            priority = (
-                MessagePriority(priority_value)
-                if priority_value in MessagePriority._value2member_map_
-                else MessagePriority.NORMAL
-            )
-
-            message = Message(
-                type=message_type,
-                data=json_data.get("data"),
-                sender_id=self.connection.channel_name,
-                metadata=json_data.get("metadata"),
-                ttl_seconds=json_data.get("ttl_seconds"),
-                priority=priority,
-            )
 
             self.connection.bytes_received += len(json_str.encode())
             self.connection.update_activity()
@@ -442,8 +404,12 @@ class BaseConsumer:
             If True, send error as plain text. If False, send as JSON. Default: False
 
         """
-        error_response = error.to_response()
         if as_text:
-            await self.send_text(str(error_response.message))
+            await self.send_text(str(error.message))
+            return
+
+        payload = self.protocol_adapter.format_error(error)
+        if isinstance(payload, str):
+            await self.send_text(payload)
         else:
-            await self.send_json(error_response.to_dict())
+            await self.send_json(payload)

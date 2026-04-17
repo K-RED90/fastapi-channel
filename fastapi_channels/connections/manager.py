@@ -9,18 +9,37 @@ from typing import TYPE_CHECKING, Any
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 
-from fastapi_channels.backends import MemoryBackend, RedisBackend
-from fastapi_channels.config import WSConfig
-from fastapi_channels.connections.registry import ConnectionRegistry
-from fastapi_channels.connections.state import Connection
-from fastapi_channels.exceptions import ConnectionError, create_error_context
-from fastapi_channels.typed import ConnectionState
-from fastapi_channels.utils import run_with_concurrency_limit, singleton
+from ..backends import MemoryBackend, RedisBackend
+from ..config import WSConfig
+from ..exceptions import ConnectionError, create_error_context
+from ..redis_namespace import app_redis_key
+from ..typed import ConnectionState
+from ..utils import run_with_concurrency_limit, singleton
+from .registry import ConnectionRegistry
+from .state import Connection
 
 if TYPE_CHECKING:
-    from fastapi_channels.backends import BaseBackend
+    from ..backends import BaseBackend
 
 _manager_instance: "ConnectionManager | None" = None
+
+
+def reset_connection_manager_singleton() -> None:
+    """Clear the ConnectionManager singleton so a new instance can be created.
+
+    Used by tests when another module has already constructed ``ConnectionManager``
+    with different configuration; the singleton decorator would otherwise return
+    the existing instance without re-running ``__init__``.
+    """
+    global _manager_instance
+    _manager_instance = None
+    ConnectionManager._reset_singleton_instance()
+
+
+def _resolve_redis_channel_prefix(config: WSConfig) -> str:
+    if config.REDIS_CHANNEL_PREFIX is not None:
+        return config.REDIS_CHANNEL_PREFIX
+    return f"{app_redis_key('ws', namespace=config.REDIS_APP_NAMESPACE)}:"
 
 
 @singleton
@@ -89,8 +108,17 @@ class ConnectionManager:
         if self._config.BACKEND_TYPE == "redis":
             self._backend = RedisBackend(
                 redis_url=self._config.REDIS_URL,
+                channel_prefix=_resolve_redis_channel_prefix(self._config),
                 registry_expiry=self._config.REDIS_REGISTRY_EXPIRY,
                 group_expiry=self._config.REDIS_GROUP_EXPIRY,
+                max_connections=self._config.REDIS_MAX_CONNECTIONS,
+                socket_timeout=self._config.REDIS_SOCKET_TIMEOUT,
+                socket_keepalive=self._config.REDIS_SOCKET_KEEPALIVE,
+                retry_on_timeout=self._config.REDIS_RETRY_ON_TIMEOUT,
+                health_check_interval=self._config.REDIS_HEALTH_CHECK_INTERVAL,
+                retry_max_attempts=self._config.REDIS_RETRY_MAX_ATTEMPTS,
+                retry_base_delay=self._config.REDIS_RETRY_BASE_DELAY,
+                retry_max_delay=self._config.REDIS_RETRY_MAX_DELAY,
             )
         else:
             self._backend = MemoryBackend()
@@ -103,7 +131,9 @@ class ConnectionManager:
 
         self.max_connections_per_client = self._config.MAX_CONNECTIONS_PER_CLIENT
         self.heartbeat_interval = self._config.WS_HEARTBEAT_INTERVAL
-        self.server_instance_id: str = self._config.SERVER_INSTANCE_ID or self._generate_instance_id()
+        self.server_instance_id: str = (
+            self._config.SERVER_INSTANCE_ID or self._generate_instance_id()
+        )
         self.log_stats = self._config.LOG_STATS
         self.enable_heartbeat = self._config.WS_ENABLE_HEARTBEAT
 
@@ -184,8 +214,6 @@ class ConnectionManager:
                     context=context,
                 )
 
-        await websocket.accept()
-
         channel_name = await self.backend.new_channel(prefix=f"ws.{user_id}" if user_id else "ws")
 
         # Add server instance ID to connection metadata for distributed tracking
@@ -200,7 +228,38 @@ class ConnectionManager:
             heartbeat_timeout=self.registry.heartbeat_timeout,
         )
 
-        await self.registry.backend.subscribe(connection.channel_name)
+        try:
+            await websocket.accept()
+        except Exception as exc:
+            await self.registry.unregister(connection.channel_name)
+            context = create_error_context(
+                user_id=user_id,
+                component="connection_manager",
+                connection_id=connection.channel_name,
+                reason="websocket_accept_failed",
+            )
+            raise ConnectionError(
+                "Failed to accept websocket connection",
+                error_code="CONNECTION_ACCEPT_FAILED",
+                context=context,
+            ) from exc
+
+        try:
+            await self.registry.backend.subscribe(connection.channel_name)
+        except Exception as exc:
+            await self.registry.unregister(connection.channel_name)
+            await self._safe_close_websocket(connection, code=1011)
+            context = create_error_context(
+                user_id=user_id,
+                component="connection_manager",
+                connection_id=connection.channel_name,
+                reason="backend_subscribe_failed",
+            )
+            raise ConnectionError(
+                "Failed to initialize connection subscription",
+                error_code="CONNECTION_SUBSCRIBE_FAILED",
+                context=context,
+            ) from exc
 
         receiver_task = asyncio.create_task(self._receive_loop(connection.channel_name))
         self._receiver_tasks[connection.channel_name] = receiver_task
@@ -339,7 +398,10 @@ class ConnectionManager:
         if not connection:
             return
 
-        if connection.state in (ConnectionState.DISCONNECTING, ConnectionState.DISCONNECTED):
+        if connection.state in (
+            ConnectionState.DISCONNECTING,
+            ConnectionState.DISCONNECTED,
+        ):
             return
 
         connection.state = ConnectionState.DISCONNECTING
@@ -402,7 +464,10 @@ class ConnectionManager:
         await self.backend.group_send(group, message)
 
     async def send_group_except(
-        self, group: str, message: dict[str, Any], exclude_connection_id: str
+        self,
+        group: str,
+        message: dict[str, Any],
+        exclude_connection_id: str,
     ) -> None:
         """Send message to group excluding specific connection.
 
@@ -603,7 +668,7 @@ class ConnectionManager:
         else:
             self._broadcast_task = None
 
-    async def stop_tasks(self, timeout: float = 10.0) -> None:
+    async def stop_tasks(self, timeout: float = 10.0) -> None:  # noqa: C901
         """Stop all background maintenance tasks with graceful shutdown.
 
         Performs graceful shutdown by:
@@ -651,7 +716,7 @@ class ConnectionManager:
         async for batch in self.registry.iter_connections(batch_size=50):
             for conn in batch:
                 task = asyncio.create_task(
-                    self.disconnect(conn.channel_name, code=1001)  # 1001 = going away
+                    self.disconnect(conn.channel_name, code=1001),  # 1001 = going away
                 )
                 disconnect_tasks.append(task)
 
@@ -690,7 +755,7 @@ class ConnectionManager:
         finally:
             self.logger.info("Backend cleanup completed")
 
-    async def _heartbeat_loop(self) -> None:
+    async def _heartbeat_loop(self) -> None:  # noqa: C901
         while self._running:
             try:
                 await asyncio.sleep(self.heartbeat_interval)
@@ -702,7 +767,8 @@ class ConnectionManager:
                         return conn.channel_name
 
                     if not await self._safe_send_json(
-                        conn, {"type": "ping", "timestamp": time.time()}
+                        conn,
+                        {"type": "ping", "timestamp": time.time()},
                     ):
                         return conn.channel_name
                     conn.heartbeat.record_ping()
@@ -711,14 +777,17 @@ class ConnectionManager:
                         await self.backend.registry_refresh_ttl(conn.channel_name, conn.user_id)
                     except Exception:
                         self.logger.warning(
-                            "Failed to refresh TTL for connection %s", conn.channel_name
+                            "Failed to refresh TTL for connection %s",
+                            conn.channel_name,
                         )  # Best effort - don't fail heartbeat if TTL refresh fails
                     return None
 
                 async for batch in self.registry.iter_connections(batch_size=100):
                     tasks = [check_connection(conn) for conn in batch]
                     results = await run_with_concurrency_limit(
-                        tasks, max_concurrent=50, return_exceptions=True
+                        tasks,
+                        max_concurrent=50,
+                        return_exceptions=True,
                     )
                     for result in results:
                         if isinstance(result, str):
@@ -727,7 +796,9 @@ class ConnectionManager:
                 disconnect_tasks = [self.disconnect(channel, code=1011) for channel in dead]
                 if disconnect_tasks:
                     await run_with_concurrency_limit(
-                        disconnect_tasks, max_concurrent=50, return_exceptions=True
+                        disconnect_tasks,
+                        max_concurrent=50,
+                        return_exceptions=True,
                     )
             except asyncio.CancelledError:
                 break
@@ -762,27 +833,29 @@ class ConnectionManager:
             except Exception:
                 await asyncio.sleep(60)
 
-    async def _broadcast_loop(self) -> None:
+    async def _broadcast_loop(self) -> None:  # noqa: C901
         while self._running:
             try:
                 message = await self.backend.receive(self._broadcast_channel, timeout=1)
                 if not message:
                     continue
 
-                broadcast_message: dict[str, Any] = message
+                broadcast_message = message
                 dead: list[str] = []
 
-                async def send_to_connection(conn: Connection) -> str | None:
+                async def send_to_connection(conn: Connection, msg: dict[str, Any]) -> str | None:
                     """Send message to single connection, return channel_name if failed."""
-                    if not await self._safe_send_message(conn, broadcast_message):
+                    if not await self._safe_send_message(conn, msg):
                         if conn.state == ConnectionState.CONNECTED:
                             return conn.channel_name
                     return None
 
                 async for batch in self.registry.iter_connections(batch_size=100):
-                    tasks = [send_to_connection(conn) for conn in batch]
+                    tasks = [send_to_connection(conn, broadcast_message) for conn in batch]
                     results = await run_with_concurrency_limit(
-                        tasks, max_concurrent=50, return_exceptions=True
+                        tasks,
+                        max_concurrent=50,
+                        return_exceptions=True,
                     )
                     for result in results:
                         if isinstance(result, str):
@@ -791,7 +864,9 @@ class ConnectionManager:
                 disconnect_tasks = [self.disconnect(channel, code=1011) for channel in dead]
                 if disconnect_tasks:
                     await run_with_concurrency_limit(
-                        disconnect_tasks, max_concurrent=50, return_exceptions=True
+                        disconnect_tasks,
+                        max_concurrent=50,
+                        return_exceptions=True,
                     )
             except asyncio.CancelledError:
                 break

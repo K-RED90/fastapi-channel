@@ -5,13 +5,13 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket
 
-from fastapi_channels.backends import MemoryBackend
-from fastapi_channels.connections.state import Connection
-from fastapi_channels.exceptions import ConnectionError
-from fastapi_channels.typed import ConnectionState
+from ..backends import MemoryBackend
+from ..exceptions import ConnectionError
+from ..typed import ConnectionState
+from .state import Connection
 
 if TYPE_CHECKING:
-    from fastapi_channels.backends import BaseBackend
+    from ..backends import BaseBackend
 
 
 class ConnectionRegistry:
@@ -61,7 +61,8 @@ class ConnectionRegistry:
 
     Notes
     -----
-    Connection limits are enforced atomically using backend.registry_add_connection_if_under_limit(),
+    Connection limits are enforced atomically using
+    backend.registry_add_connection_if_under_limit(),
     which prevents race conditions in distributed deployments. The Redis backend uses a Lua script
     for true atomicity across all server instances, while the Memory backend uses asyncio locks
     for thread-safety within a single process.
@@ -174,7 +175,8 @@ class ConnectionRegistry:
 
         if connection is not None:
             await self.backend.registry_remove_connection(
-                connection_id=connection_id, user_id=connection.user_id
+                connection_id=connection_id,
+                user_id=connection.user_id,
             )
 
     def get(self, connection_id: str) -> Connection | None:
@@ -218,7 +220,8 @@ class ConnectionRegistry:
         return list(self.connections.values())
 
     async def iter_connections(
-        self, batch_size: int = 100
+        self,
+        batch_size: int = 100,
     ) -> AsyncIterator[tuple[Connection, ...]]:
         """Stream connections in batches to avoid loading all into memory.
 
@@ -288,7 +291,8 @@ class ConnectionRegistry:
             connection.groups.add(group)
             # Persist groups to backend for cross-server visibility and cleanup.
             await self.backend.registry_update_groups(
-                connection_id=connection_id, groups=connection.groups
+                connection_id=connection_id,
+                groups=connection.groups,
             )
 
     async def remove_from_group(self, connection_id: str, group: str) -> None:
@@ -311,7 +315,8 @@ class ConnectionRegistry:
             connection.groups.discard(group)
             # Persist groups to backend for cross-server visibility and cleanup.
             await self.backend.registry_update_groups(
-                connection_id=connection_id, groups=connection.groups
+                connection_id=connection_id,
+                groups=connection.groups,
             )
 
     async def user_channels(self, user_id: str) -> set[str]:
